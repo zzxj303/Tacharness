@@ -1,0 +1,16 @@
+# Only the rollout scaffold is tracked. Upstream checkouts (TacHarness/, Show-Harness/,
+# RoboLab/, ...), models/, outputs/ and logs/ live in this directory but are not part of
+# the repository; see README section 0.
+/*
+!/.gitignore
+!/README.md
+!/configs/
+!/gpt_rollout/
+!/scripts/
+!/tests/
+
+# Holds the API key; copy configs/llm.example.yaml instead.
+/configs/llm.yaml
+/scripts/probes/
+__pycache__/
+*.pyc

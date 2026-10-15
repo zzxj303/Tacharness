@@ -1,0 +1,16 @@
+# Provider runtime dependencies not pulled in by isaacsim/isaaclab.
+gymnasium
+requests
+opencv-python
+Pillow
+imageio[ffmpeg]
+scipy
+matplotlib
+h5py
+PyYAML
+pandas
+pyarrow
+tqdm
+tyro
+python-dotenv
+setuptools<81

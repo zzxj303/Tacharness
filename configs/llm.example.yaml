@@ -1,0 +1,10 @@
+# Copy to configs/llm.yaml and fill in endpoint and api_key (llm.yaml is not tracked).
+profiles:
+  openrouter:
+    api_key: <API_KEY>
+    api_mode: chat
+    endpoint: <OPENAI_COMPATIBLE_BASE_URL>/v1
+    max_attempts: 3
+    model: openai/gpt-6-astra
+    temperature: 0
+    timeout_s: 60
