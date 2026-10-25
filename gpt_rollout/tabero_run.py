@@ -1,6 +1,7 @@
-"""Collect GPT rollouts for one Tabero task (one Isaac process per task).
+"""Collect rollouts for one Tabero task (one Isaac process per task).
 
-Run through scripts/run_tabero.sh, which sets the Isaac runtime and paths.
+Run through scripts/isaac_python.sh, which sets the Isaac runtime and paths. With
+--policy jemm (the default) the JEMM server (scripts/jemm_serve.sh) must be running.
 """
 
 from __future__ import annotations
@@ -12,6 +13,8 @@ import sys
 import traceback
 from pathlib import Path
 
+from gpt_rollout import MAX_DECISIONS, TIME_LIMIT_SCALE
+
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("--task-suite", required=True)
 parser.add_argument("--task-id", type=int, required=True)
@@ -19,8 +22,20 @@ parser.add_argument("--seed-start", type=int, default=0)
 parser.add_argument("--num-seeds", type=int, default=50)
 parser.add_argument("--output-root", type=Path, required=True)
 parser.add_argument("--device", default="cuda")
-parser.add_argument("--policy", choices=("gpt", "scripted"), default="gpt")
-parser.add_argument("--max-decisions", type=int, default=200)
+parser.add_argument("--policy", choices=("jemm", "gpt", "scripted"), default="jemm")
+parser.add_argument("--jemm-endpoint", default="http://127.0.0.1:8790")
+parser.add_argument(
+    "--time-limit-scale",
+    type=float,
+    default=TIME_LIMIT_SCALE,
+    help="lengthen the task's own episode time limit by this factor (README 0.1); 1 keeps the original",
+)
+parser.add_argument(
+    "--max-decisions",
+    type=int,
+    default=None,
+    help="decisions per episode; default none, the time limit ends the episode (200 with --disable-time-out)",
+)
 parser.add_argument(
     "--disable-time-out",
     action="store_true",
@@ -29,6 +44,8 @@ parser.add_argument(
 parser.add_argument("--no-record", action="store_true", help="measurement only: keep the GPT call log and results, skip the per-frame data")
 parser.add_argument("--scripted-place-m", type=float, default=0.15, help="scripted policy: release height above the target")
 args = parser.parse_args()
+if args.disable_time_out and args.max_decisions is None:
+    args.max_decisions = MAX_DECISIONS  # nothing else would end an unsuccessful episode
 
 ENV_ID = "Isaac-Libero-Tacumi-IK-Camera-ContactForce-v0"
 NUM_SUCCESS_STEPS = 8  # openpi_inference_client.py default, part of the success rule
@@ -53,15 +70,20 @@ from isaaclab_tasks.utils.parse_cfg import parse_env_cfg  # noqa: E402
 from tacumi.tabero_rollout import TaberoTacumiRolloutHook  # noqa: E402
 
 from gpt_rollout.actions import ACTION_LAYOUT  # noqa: E402
+from gpt_rollout.datasets import export_episode  # noqa: E402
 from gpt_rollout.episode import GPTPolicy, StepResult, finish_episode, load_results, run_episode  # noqa: E402
+from gpt_rollout.interpreter import STEP_M  # noqa: E402
+from gpt_rollout.jemm import JEMMClient, JEMMPolicy  # noqa: E402
 from gpt_rollout.llm import LLMClient  # noqa: E402
 from gpt_rollout.prompts import Observation  # noqa: E402
 from gpt_rollout.scripted import ScriptedPolicy  # noqa: E402
 from gpt_rollout.sim import (  # noqa: E402
     contact_center_pose,
     gripper_closed,
+    gripper_width_m,
     positions_in_base_frame,
     runtime_metadata,
+    scale_time_limit,
     seed_everything,
     tactile_composite,
     uint8_rgb,
@@ -85,6 +107,9 @@ class TaberoAdapter:
 
     def tcp_pose(self) -> tuple[np.ndarray, np.ndarray]:
         return contact_center_pose(self.env)
+
+    def gripper_width_m(self) -> float:
+        return gripper_width_m(self.env.scene["robot"])
 
     def observe(self) -> Observation:
         scene = self.env.scene
@@ -137,7 +162,7 @@ def main() -> None:
     if args.disable_time_out:
         env_cfg.terminations.time_out = None
     env = gym.make(ENV_ID, cfg=env_cfg).unwrapped
-    native_steps = int(env.max_episode_length)
+    native_steps = scale_time_limit(env, args.time_limit_scale)
 
     task_info = env_cfg.libero_config.task_info
     instruction = task_info["language_instruction"]
@@ -157,17 +182,24 @@ def main() -> None:
         policy_contract="tabero_gpt_taskspace_absolute_v1",
         action_layout=ACTION_LAYOUT,
     )
-    if args.policy == "gpt":
+    if args.policy == "jemm":
+        client = JEMMClient(args.jemm_endpoint)
+        client.wait_ready()
+        policy = JEMMPolicy(client)
+    elif args.policy == "gpt":
         policy = GPTPolicy(LLMClient())
     else:
         goal = env_cfg.libero_config.goals[0]
         policy = ScriptedPolicy(goal["ref_obj"], goal["target"], place_m=args.scripted_place_m)
+    task_name = f"task_{args.task_id:03d}"
     meta = {
         "benchmark": "tabero",
         "task_suite": args.task_suite,
         "task_id": args.task_id,
         "instruction": instruction,
         "max_episode_steps": native_steps,
+        "time_limit_scale": args.time_limit_scale,
+        "episode_step_limit": None if args.disable_time_out else int(env.max_episode_length),
         "time_out_disabled": args.disable_time_out,
         "num_success_steps": NUM_SUCCESS_STEPS,
         **runtime_metadata(ENV_ID),
@@ -183,10 +215,21 @@ def main() -> None:
             hook.capture_tactile()
             episode_dir = task_dir / f"episode_{seed:03d}"
             adapter = TaberoAdapter(env, hook, success_term, instruction, list(env_cfg.libero_config.objects))
-            summary = {"seed": seed, **meta, **run_episode(adapter, policy, episode_dir, args.max_decisions)}
+            summary = {"seed": seed, **meta, **run_episode(adapter, policy, episode_dir, args.max_decisions, seed)}
             summary["success_within_max_episode_steps"] = summary["success"] and summary["steps"] <= native_steps
             hook.finish_episode(success=summary["success"], experiment_index=seed, extra=summary)
-            finish_episode(results_path, episode_dir, summary)
+            if not args.no_record and args.policy != "scripted":
+                summary["datasets"] = export_episode(
+                    episode_dir,
+                    rollout_dir=args.output_root / "showharness" / "tabero" / args.task_suite / task_name / f"rollout_{seed:03d}",
+                    dataset_root=args.output_root / "lerobot_v3" / "tabero",
+                    benchmark="tabero",
+                    source_id=f"tabero:{args.task_suite}:{task_name}:seed_{seed:03d}",
+                    task=instruction,
+                    summary=summary,
+                    metadata={"task": f"{args.task_suite}/{task_name}", "task_text": instruction, "step_m": STEP_M},
+                )
+            finish_episode(results_path, summary)
             print(f"[gpt_rollout] {args.task_suite} task {args.task_id} seed {seed}: " + json.dumps(summary), flush=True)
 
     env.close()

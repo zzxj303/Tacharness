@@ -1,6 +1,7 @@
-"""Collect GPT rollouts for one RoboLab benchmark task (one Isaac process per task).
+"""Collect rollouts for one RoboLab benchmark task (one Isaac process per task).
 
-Run through scripts/isaac_python.sh, which sets the Isaac runtime and paths.
+Run through scripts/isaac_python.sh, which sets the Isaac runtime and paths. With
+--policy jemm (the default) the JEMM server (scripts/jemm_serve.sh) must be running.
 """
 
 from __future__ import annotations
@@ -12,14 +13,25 @@ import sys
 import traceback
 from pathlib import Path
 
+from gpt_rollout import TIME_LIMIT_SCALE
+
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("--task", required=True, help="Task class name, e.g. BananaInBowlTask")
 parser.add_argument("--seed-start", type=int, default=0)
 parser.add_argument("--num-seeds", type=int, default=50)
 parser.add_argument("--output-root", type=Path, required=True)
 parser.add_argument("--device", default="cuda:0")
-parser.add_argument("--policy", choices=("gpt", "scripted"), default="gpt")
-parser.add_argument("--max-decisions", type=int, default=200)
+parser.add_argument("--policy", choices=("jemm", "gpt", "scripted"), default="jemm")
+parser.add_argument("--jemm-endpoint", default="http://127.0.0.1:8790")
+parser.add_argument(
+    "--time-limit-scale",
+    type=float,
+    default=TIME_LIMIT_SCALE,
+    help="lengthen the task's own episode time limit by this factor (README 0.1); 1 keeps the original",
+)
+parser.add_argument(
+    "--max-decisions", type=int, default=None, help="decisions per episode; default none, the time limit ends the episode"
+)
 parser.add_argument("--scripted-object", help="scripted policy: object to pick, e.g. banana")
 parser.add_argument("--scripted-target", help="scripted policy: where to place it, e.g. bowl")
 parser.add_argument("--no-record", action="store_true", help="measurement only: keep the GPT call log and results, skip the per-frame data")
@@ -48,15 +60,20 @@ from tacumi.recorder import UnifiedEpisodeRecorder  # noqa: E402
 from tacumi.tactile_runtime import DEFAULT_CONFIG, TacumiTactileRuntime  # noqa: E402
 
 from gpt_rollout.actions import ACTION_LAYOUT  # noqa: E402
+from gpt_rollout.datasets import export_episode  # noqa: E402
 from gpt_rollout.episode import GPTPolicy, StepResult, finish_episode, load_results, run_episode  # noqa: E402
+from gpt_rollout.interpreter import STEP_M  # noqa: E402
+from gpt_rollout.jemm import JEMMClient, JEMMPolicy  # noqa: E402
 from gpt_rollout.llm import LLMClient  # noqa: E402
 from gpt_rollout.prompts import Observation  # noqa: E402
 from gpt_rollout.scripted import ScriptedPolicy  # noqa: E402
 from gpt_rollout.sim import (  # noqa: E402
     contact_center_pose,
     gripper_closed,
+    gripper_width_m,
     positions_in_base_frame,
     runtime_metadata,
+    scale_time_limit,
     seed_everything,
     tactile_composite,
     to_numpy,
@@ -95,6 +112,9 @@ class RoboLabAdapter:
 
     def tcp_pose(self) -> tuple[np.ndarray, np.ndarray]:
         return contact_center_pose(self.env)
+
+    def gripper_width_m(self) -> float:
+        return gripper_width_m(self.env.scene["robot"])
 
     def observe(self) -> Observation:
         robot = self.env.scene["robot"]
@@ -176,6 +196,7 @@ def main() -> None:
     done = load_results(results_path)
 
     env, env_cfg = create_env(env_name, device=args.device, num_envs=1, policy="gpt")
+    native_steps = scale_time_limit(env, args.time_limit_scale)
     instruction = env_cfg.instruction
     fps = 1.0 / (env_cfg.sim.render_interval * env_cfg.sim.dt)
     runtime = TacumiTactileRuntime(
@@ -184,7 +205,11 @@ def main() -> None:
         expected_sensors=2,
         headless=True,
     )
-    if args.policy == "gpt":
+    if args.policy == "jemm":
+        client = JEMMClient(args.jemm_endpoint)
+        client.wait_ready()
+        policy = JEMMPolicy(client)
+    elif args.policy == "gpt":
         policy = GPTPolicy(LLMClient())
     else:
         policy = ScriptedPolicy(args.scripted_object, args.scripted_target, place_m=args.scripted_place_m)
@@ -192,7 +217,9 @@ def main() -> None:
         "benchmark": "robolab",
         "task": args.task,
         "instruction": instruction,
-        "max_episode_steps": int(env.max_episode_length),
+        "max_episode_steps": native_steps,
+        "time_limit_scale": args.time_limit_scale,
+        "episode_step_limit": int(env.max_episode_length),
         **runtime_metadata(env_name),
     }
 
@@ -221,10 +248,22 @@ def main() -> None:
             overwrite=True,
         )
         adapter = RoboLabAdapter(env, runtime, recorder, instruction, obs, tactile)
-        summary = {"seed": seed, **meta, **run_episode(adapter, policy, episode_dir, args.max_decisions)}
+        summary = {"seed": seed, **meta, **run_episode(adapter, policy, episode_dir, args.max_decisions, seed)}
+        summary["success_within_max_episode_steps"] = summary["success"] and summary["steps"] <= native_steps
         if recorder is not None:
             recorder.close(success=summary["success"], total_reward=adapter.total_reward, extra=summary)
-        finish_episode(results_path, episode_dir, summary)
+            if args.policy != "scripted":
+                summary["datasets"] = export_episode(
+                    episode_dir,
+                    rollout_dir=args.output_root / "showharness" / "robolab" / args.task / f"rollout_{seed:03d}",
+                    dataset_root=args.output_root / "lerobot_v3" / "robolab",
+                    benchmark="robolab",
+                    source_id=f"robolab:{args.task}:seed_{seed:03d}",
+                    task=instruction,
+                    summary=summary,
+                    metadata={"task": args.task, "task_text": instruction, "step_m": STEP_M},
+                )
+        finish_episode(results_path, summary)
         print(f"[gpt_rollout] {args.task} seed {seed}: " + json.dumps(summary), flush=True)
         env.reset_eval_state()
 

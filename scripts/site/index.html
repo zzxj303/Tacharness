@@ -1,0 +1,767 @@
+<title>TacClaw Rollout 浏览</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Condensed:wght@500;600&family=IBM+Plex+Sans:wght@400;500;600&family=Noto+Sans+SC:wght@400;500;600&display=swap">
+<style>
+/* Layout: an inspection bench — benchmark switch on top, episode rail left, the selected
+   episode's videos, decisions and per-frame traces right; input and data formats below. */
+:root {
+  --page: #f3f5f6;
+  --surface: #ffffff;
+  --sunken: #eef1f3;
+  --ink: #121619;
+  --ink-2: #4a545e;
+  --muted: #7a848e;
+  --hair: #dde2e6;
+  --hair-2: #c5ccd2;
+  --accent: #0f4c5c;
+  --accent-soft: #e3eef1;
+  --fail: #c23434;
+  --fail-soft: #fbeaea;
+  --x: #2a78d6;
+  --y: #eb6834;
+  --z: #1baf7a;
+  --grasp: #eda100;
+  --release: #e87ba4;
+  --on-fill: #ffffff;
+  --on-yellow: #0b0b0b;
+  --font-display: "IBM Plex Sans Condensed", "IBM Plex Sans", "Noto Sans SC", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+  --font-body: "IBM Plex Sans", "Noto Sans SC", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, "Noto Sans SC", monospace;
+  --step--1: 0.8125rem;
+  --step-0: 0.9375rem;
+  --step-1: 1.125rem;
+  --step-2: 1.4rem;
+  --step-3: 2rem;
+  --radius: 6px;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --page: #0e1114; --surface: #161a1e; --sunken: #1c2126; --ink: #eef1f3; --ink-2: #b6bfc7; --muted: #87919b;
+    --hair: #262c32; --hair-2: #353c43; --accent: #7cc4d4; --accent-soft: #19282d; --fail: #e66767; --fail-soft: #2c1a1a;
+    --x: #3987e5; --y: #d95926; --z: #199e70; --grasp: #c98500; --release: #d55181; --on-fill: #ffffff; --on-yellow: #0b0b0b;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --page: #0e1114; --surface: #161a1e; --sunken: #1c2126; --ink: #eef1f3; --ink-2: #b6bfc7; --muted: #87919b;
+  --hair: #262c32; --hair-2: #353c43; --accent: #7cc4d4; --accent-soft: #19282d; --fail: #e66767; --fail-soft: #2c1a1a;
+  --x: #3987e5; --y: #d95926; --z: #199e70; --grasp: #c98500; --release: #d55181; --on-fill: #ffffff; --on-yellow: #0b0b0b;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+body {
+  background: var(--page);
+  color: var(--ink);
+  font-family: var(--font-body);
+  font-size: var(--step-0);
+  line-height: 1.55;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 0 48px;
+}
+body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); z-index: 10; background: var(--page); }
+.wrap { max-width: 1320px; margin: 0 auto; display: grid; gap: 28px; }
+h1, h2, h3 { font-family: var(--font-display); text-wrap: balance; margin: 0; line-height: 1.2; }
+h1 { font-size: var(--step-3); font-weight: 600; letter-spacing: -0.01em; }
+h2 { font-size: var(--step-2); font-weight: 600; }
+h3 { font-size: var(--step-1); font-weight: 600; }
+p { margin: 0; max-width: 72ch; }
+code, pre, .mono { font-family: var(--font-mono); }
+code { font-size: 0.9em; background: var(--sunken); padding: 0.05em 0.35em; border-radius: 4px; }
+.label { font-size: var(--step--1); color: var(--muted); letter-spacing: 0.04em; }
+.tnum { font-variant-numeric: tabular-nums; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* Masthead */
+.masthead { padding-top: 32px; display: grid; gap: 14px; }
+.masthead .lede { color: var(--ink-2); font-size: var(--step-1); max-width: 80ch; }
+.facts { display: flex; flex-wrap: wrap; gap: 8px 28px; padding: 14px 0 0; border-top: 1px solid var(--hair); }
+.fact { display: grid; gap: 0; }
+.fact b { font-family: var(--font-display); font-size: var(--step-2); font-weight: 600; }
+.fact.fail b { color: var(--fail); }
+
+/* Benchmark switch */
+.bench-bar {
+  position: sticky; top: env(safe-area-inset-top, 0px); z-index: 5;
+  background: var(--page); padding-block: 10px; border-bottom: 1px solid var(--hair);
+  display: flex; flex-wrap: wrap; align-items: center; gap: 10px 18px;
+}
+.tabs { display: flex; gap: 4px; background: var(--sunken); padding: 4px; border-radius: 8px; }
+.tabs button {
+  font: 500 var(--step-0) var(--font-body); color: var(--ink-2); background: transparent; border: 0;
+  padding: 6px 14px; border-radius: 6px; cursor: pointer;
+}
+.tabs button[aria-selected="true"] { background: var(--surface); color: var(--ink); box-shadow: 0 1px 2px rgba(0,0,0,0.08); }
+.bench-bar .note { color: var(--muted); font-size: var(--step--1); }
+.jump { margin-left: auto; display: flex; gap: 14px; font-size: var(--step--1); }
+.jump a { color: var(--accent); text-decoration: none; }
+.jump a:hover { text-decoration: underline; }
+
+/* Workspace */
+.workspace { display: grid; grid-template-columns: minmax(250px, 300px) minmax(0, 1fr); gap: 24px; align-items: start; }
+.rail { display: grid; gap: 6px; position: sticky; top: calc(env(safe-area-inset-top, 0px) + 64px); }
+.ep {
+  text-align: left; font: inherit; color: inherit; background: transparent; border: 1px solid transparent;
+  border-radius: var(--radius); padding: 10px 12px; cursor: pointer; display: grid; gap: 4px;
+}
+.ep:hover { background: var(--sunken); }
+.ep[aria-current="true"] { background: var(--surface); border-color: var(--hair-2); }
+.ep .ep-task { font-family: var(--font-mono); font-size: var(--step--1); color: var(--ink-2); }
+.ep .ep-instr { font-weight: 500; line-height: 1.35; }
+.ep .ep-meta { display: flex; flex-wrap: wrap; gap: 4px 10px; font-size: var(--step--1); color: var(--muted); }
+.pill { display: inline-flex; align-items: center; gap: 4px; font-size: var(--step--1); font-weight: 500; padding: 1px 8px; border-radius: 999px; }
+.pill.fail { background: var(--fail-soft); color: var(--fail); }
+.pill.ok { background: var(--accent-soft); color: var(--accent); }
+
+.inspector { display: grid; gap: 22px; min-width: 0; }
+.panel { background: var(--surface); border: 1px solid var(--hair); border-radius: 8px; padding: 18px; display: grid; gap: 14px; min-width: 0; }
+.panel-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 6px 16px; }
+.panel-head p { color: var(--ink-2); font-size: var(--step--1); }
+.ep-title { display: grid; gap: 8px; }
+.ep-title h2 { font-size: var(--step-2); }
+.chips { display: flex; flex-wrap: wrap; gap: 6px 16px; color: var(--ink-2); font-size: var(--step--1); }
+.chips span b { color: var(--ink); font-weight: 600; }
+
+/* Videos */
+.videos { display: grid; gap: 8px; }
+.videos video { width: 100%; max-width: 100%; background: #000; border-radius: 6px; display: block; }
+.videos .tac { max-width: 640px; }
+.readout { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 18px; font-size: var(--step--1); color: var(--ink-2); }
+.readout b { color: var(--ink); }
+
+/* Token chips */
+.tok { display: inline-flex; align-items: center; gap: 6px; font-family: var(--font-mono); font-size: var(--step--1); white-space: nowrap; }
+.tok i { width: 10px; height: 10px; border-radius: 2px; display: inline-block; flex: none; }
+.k-x { --kc: var(--x); } .k-y { --kc: var(--y); } .k-z { --kc: var(--z); } .k-grasp { --kc: var(--grasp); } .k-release { --kc: var(--release); }
+.tok i { background: var(--kc); }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: var(--step--1); color: var(--ink-2); }
+.legend .sw { display: inline-flex; align-items: center; gap: 6px; }
+.legend .sw i { width: 14px; height: 10px; border-radius: 2px; background: var(--kc); display: inline-block; }
+.legend .ln i { height: 2px; width: 16px; border-radius: 1px; }
+
+/* SVG charts */
+svg { display: block; max-width: 100%; overflow: visible; }
+.grid line { stroke: var(--hair); stroke-width: 1; }
+.axis line, .axis path { stroke: var(--hair-2); stroke-width: 1; }
+.axis text, .tick text, .ann { fill: var(--muted); font: 11px var(--font-mono); }
+.ann.ink { fill: var(--ink-2); }
+.seg { fill: var(--kc); cursor: pointer; }
+.seg:hover { opacity: 0.8; }
+.seg-label { fill: var(--on-fill); font: 600 10px var(--font-mono); pointer-events: none; }
+.seg-label.on-yellow { fill: var(--on-yellow); }
+.playhead { stroke: var(--ink); stroke-width: 1.5; }
+.series { fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.s-x { stroke: var(--x); } .s-y { stroke: var(--y); } .s-z { stroke: var(--z); }
+.flag { fill: var(--ink-2); }
+.flag-bg { fill: var(--sunken); }
+.path-line { fill: none; stroke: var(--ink-2); stroke-width: 2; stroke-linejoin: round; }
+.path-start { fill: var(--surface); stroke: var(--ink-2); stroke-width: 2; }
+.path-end { fill: var(--ink-2); }
+.path-now { fill: var(--accent); stroke: var(--surface); stroke-width: 2; }
+.obj { fill: var(--muted); stroke: var(--surface); stroke-width: 2; }
+.obj.target { fill: var(--accent); }
+.obj-label { fill: var(--ink-2); font: 11px var(--font-body); }
+.obj-label.target { fill: var(--accent); font-weight: 600; }
+.dist-line { fill: none; stroke: var(--x); stroke-width: 2; }
+.crosshair { stroke: var(--muted); stroke-width: 1; stroke-dasharray: 3 3; }
+.hit { fill: transparent; cursor: crosshair; }
+.tooltip {
+  position: fixed; z-index: 20; pointer-events: none; background: var(--surface); color: var(--ink);
+  border: 1px solid var(--hair-2); border-radius: 6px; padding: 8px 10px; font-size: var(--step--1);
+  box-shadow: 0 4px 16px rgba(0,0,0,0.12); min-width: 140px; display: grid; gap: 2px;
+}
+.tooltip .mono { font-size: 12px; }
+.charts-2 { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 18px; }
+.chart-box { display: grid; gap: 8px; min-width: 0; }
+.chart-box .label { letter-spacing: 0.02em; }
+
+/* Decision table */
+.table-scroll { overflow: auto; max-height: 420px; border: 1px solid var(--hair); border-radius: 6px; }
+table { border-collapse: collapse; width: 100%; font-size: var(--step--1); }
+th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--hair); white-space: nowrap; vertical-align: middle; }
+th { position: sticky; top: 0; background: var(--sunken); color: var(--ink-2); font-weight: 500; z-index: 1; }
+tbody tr { cursor: pointer; }
+tbody tr:hover { background: var(--sunken); }
+tbody tr.now { background: var(--accent-soft); }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; font-family: var(--font-mono); }
+.probs rect.bar { fill: var(--kc); }
+.probs rect.track { fill: var(--sunken); }
+.probs rect.pick { fill: none; stroke: var(--ink); stroke-width: 1.5; }
+
+/* Code */
+pre {
+  margin: 0; background: var(--sunken); border: 1px solid var(--hair); border-radius: 6px; padding: 12px 14px;
+  font-size: 12.5px; line-height: 1.55; overflow: auto; max-height: 460px; white-space: pre; color: var(--ink);
+}
+pre.wrap-text { white-space: pre-wrap; word-break: break-word; }
+pre .hl { color: var(--accent); font-weight: 600; }
+pre .priv { background: var(--fail-soft); color: var(--fail); }
+.records { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 14px; }
+.records > div { display: grid; gap: 6px; min-width: 0; align-content: start; }
+
+/* Sections below */
+.section { display: grid; gap: 18px; padding-top: 18px; border-top: 1px solid var(--hair); scroll-margin-top: 72px; }
+.section > header { display: grid; gap: 8px; }
+.section > header p { color: var(--ink-2); }
+.flow { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; counter-reset: flow; list-style: none; padding: 0; margin: 0; }
+.flow li { background: var(--surface); border: 1px solid var(--hair); border-radius: 6px; padding: 10px 12px; display: grid; gap: 2px; font-size: var(--step--1); color: var(--ink-2); }
+.flow li::before { counter-increment: flow; content: counter(flow); font: 600 var(--step-1) var(--font-display); color: var(--accent); }
+.flow li b { color: var(--ink); font-weight: 600; font-size: var(--step-0); }
+.msg { display: grid; grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.6fr); gap: 14px; }
+.msg-part { display: grid; gap: 8px; align-content: start; min-width: 0; }
+.imgs { display: grid; grid-template-columns: 1fr 1fr 2.2fr; gap: 8px; align-items: end; }
+.imgs figure { margin: 0; display: grid; gap: 4px; }
+.imgs img { width: 100%; max-width: 100%; border-radius: 4px; border: 1px solid var(--hair); background: #000; display: block; }
+.imgs figcaption { font-size: var(--step--1); color: var(--muted); }
+.out-table td .bar { display: inline-block; height: 8px; border-radius: 2px; background: var(--kc); vertical-align: middle; }
+.callout { border-left: 3px solid var(--hair-2); padding: 2px 0 2px 12px; color: var(--ink-2); font-size: var(--step--1); max-width: 90ch; }
+.fields { overflow-x: auto; border: 1px solid var(--hair); border-radius: 6px; }
+.fields td { white-space: normal; min-width: 90px; }
+.fields td:first-child { font-family: var(--font-mono); white-space: nowrap; }
+.two { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 18px; align-items: start; }
+.stack { display: grid; gap: 10px; min-width: 0; align-content: start; }
+ul.notes { margin: 0; padding-left: 1.2em; display: grid; gap: 6px; color: var(--ink-2); max-width: 90ch; }
+.empty-note { color: var(--muted); font-size: var(--step--1); padding: 24px 0; }
+
+@media (max-width: 980px) {
+  .workspace { grid-template-columns: minmax(0, 1fr); }
+  .rail { position: static; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); }
+  .charts-2, .records, .msg, .two { grid-template-columns: minmax(0, 1fr); }
+  .flow { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
+}
+@media (max-width: 560px) {
+  h1 { font-size: var(--step-2); }
+  .imgs { grid-template-columns: 1fr 1fr; }
+  .imgs figure:last-child { grid-column: 1 / -1; }
+  .jump { margin-left: 0; }
+}
+@media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; } }
+</style>
+
+<div class="wrap">
+  <header class="masthead">
+    <span class="label">JEMM × TacClaw · Show-Harness meta action · <span id="generated"></span></span>
+    <h1 id="page-title">TacClaw Rollout 浏览</h1>
+    <p class="lede">JEMM（Qwen3.8-27B LoRA，int8）每次看一份观测，从 8 个离散动作里按概率抽一个，Show-Harness 的 <code>AtomicExec</code> 把它展开成若干个仿真步执行。<span id="limits-note"></span>每个回合同时写出离散（Show-Harness）和连续（LeRobot v3）两份数据。</p>
+    <div class="facts" id="facts"></div>
+  </header>
+
+  <nav class="bench-bar" aria-label="切换 benchmark">
+    <div class="tabs" role="tablist" id="tabs"></div>
+    <span class="note" id="bench-note"></span>
+    <div class="jump"><a href="#input">输入格式</a><a href="#format">数据格式</a></div>
+  </nav>
+
+  <div class="workspace">
+    <div class="rail" id="rail" aria-label="回合列表"></div>
+    <div class="inspector" id="inspector"><p class="empty-note">正在读取试跑数据…</p></div>
+  </div>
+
+  <section class="section" id="input">
+    <header>
+      <span class="label">输入格式</span>
+      <h2>JEMM 每次收到什么、返回什么</h2>
+      <p>下面是当前 benchmark 第一个回合<b>第 0 次决策</b>的真实输入，由 JEMM 自己的 <code>jemm.contract.mm_messages</code> 重建，和它实际收到的一字不差。</p>
+    </header>
+    <ol class="flow">
+      <li><b>读观测</b>场景相机、腕部相机、触觉拼图、手的位姿、物体坐标、最近 5 个移动动作</li>
+      <li><b>拼成请求</b>说明文字和观测放进 State，8 个动作作为 Candidates，三张图放在文字前</li>
+      <li><b>JEMM 打分</b>读 A–H 八个标签 token 的 logits，softmax 后得到 8 个概率</li>
+      <li><b>按概率抽样</b>随机数用回合种子初始化，不取最大值</li>
+      <li><b>解释器执行</b><code>AtomicExec</code> 走若干个 env 步，每步录一帧，然后回到 1</li>
+    </ol>
+    <div class="msg">
+      <div class="msg-part">
+        <h3>system</h3>
+        <p class="label">JEMM 训练时固定，不能改</p>
+        <pre class="wrap-text" id="sys-prompt"></pre>
+        <h3>请求体</h3>
+        <p class="label">rollout 端发给 <code>POST /v1/systemone</code> 的 JSON（图片和 State 省略）</p>
+        <pre id="req-body"></pre>
+      </div>
+      <div class="msg-part">
+        <h3>user</h3>
+        <p class="label">先是三张图，再是一段文字</p>
+        <div class="imgs" id="prompt-imgs"></div>
+        <pre class="wrap-text" id="user-text"></pre>
+        <p class="callout">标红的是物体真值坐标。它只给 JEMM 看，两份训练数据里都没有。</p>
+      </div>
+    </div>
+    <div class="two">
+      <div class="stack">
+        <h3>JEMM 返回的结果</h3>
+        <div class="fields"><table class="out-table" id="out-table"></table></div>
+      </div>
+      <div class="stack" id="out-notes"></div>
+    </div>
+  </section>
+
+  <section class="section" id="format">
+    <header>
+      <span class="label">数据格式</span>
+      <h2>两份数据存在哪里、各有哪些字段</h2>
+      <p>每个回合同时写出离散的逐决策数据和连续的逐帧数据，两者靠决策编号对应。路径相对于 <code class="output-root"></code>。</p>
+    </header>
+    <pre id="tree"></pre>
+    <div class="two">
+      <div class="stack">
+        <h3>离散：<code>actions.jsonl</code> 每行一次决策</h3>
+        <div class="fields"><table id="disc-fields"></table></div>
+      </div>
+      <div class="stack">
+        <h3>连续：LeRobot v3 每行一个 env 步</h3>
+        <div class="fields"><table id="cont-fields"></table></div>
+      </div>
+    </div>
+    <ul class="notes">
+      <li><b>从离散找连续</b>：<code>actions.jsonl</code> 第 j 行的 <code>first_frame</code>、<code>frame_count</code> 就是它在逐帧数据里的帧范围。<b>从连续找离散</b>：每帧的 <code>decision_index</code> 等于 <code>actions.jsonl</code> 的 <code>step</code>。</li>
+      <li><b>观测的时刻不同</b>：离散数据存的是动作执行<b>之前</b>的观测；连续数据第 k 帧存的是第 k 个动作和执行<b>之后</b>的观测。所以第 j 次决策看到的画面在连续数据的第 <code>first_frame − 1</code> 帧，第 0 次决策的画面只在离散数据里。</li>
+      <li><b>视频</b>在连续数据里，每个回合两路：场景相机和腕部相机左右拼接，以及触觉拼图。这个页面里的视频是缩小到一半的网页版。</li>
+      <li><code>tabero/…/episode_XXX/gpt_calls/calls.jsonl</code> 是完整调用日志，含物体真值坐标，不能当训练数据。</li>
+    </ul>
+  </section>
+</div>
+<div class="tooltip" id="tip" hidden></div>
+
+<script>
+(() => {
+  const TOKENS = ["MV_FWD", "MV_BACK", "MV_LEFT", "MV_RIGHT", "MV_UP", "MV_DOWN", "GRASP", "RELEASE"];
+  const KIND = { MV_FWD: "x", MV_BACK: "x", MV_LEFT: "y", MV_RIGHT: "y", MV_UP: "z", MV_DOWN: "z", GRASP: "grasp", RELEASE: "release" };
+  const SHORT = { MV_FWD: "+x", MV_BACK: "−x", MV_RIGHT: "+y", MV_LEFT: "−y", MV_UP: "+z", MV_DOWN: "−z", GRASP: "G", RELEASE: "R" };
+  const KIND_LABEL = { x: "x 方向移动（FWD / BACK）", y: "y 方向移动（LEFT / RIGHT）", z: "z 方向移动（UP / DOWN）", grasp: "GRASP 闭合", release: "RELEASE 张开" };
+  const END = { time_out: "超时", object_dropped: "物体掉落", success: "成功", max_decisions: "达到决策上限", invalid_output: "输出不合法" };
+  const BENCH_LABEL = { tabero: "Tabero", robolab: "RoboLab" };
+  const SVGNS = "http://www.w3.org/2000/svg";
+  const $ = (s, r = document) => r.querySelector(s);
+  const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  const fmt = (v, d = 3) => (v == null || Number.isNaN(v) ? "—" : Number(v).toFixed(d));
+  const tip = $("#tip");
+
+  let data, bench = "tabero", epIdx = 0, ep = null, raf = 0, lastDecision = -1;
+
+  function el(tag, attrs = {}, parent) {
+    const node = document.createElementNS(SVGNS, tag);
+    for (const [k, v] of Object.entries(attrs)) node.setAttribute(k, v);
+    if (parent) parent.appendChild(node);
+    return node;
+  }
+  function tokChip(t) { return `<span class="tok k-${KIND[t]}"><i></i>${t}</span>`; }
+  function showTip(html, x, y) {
+    tip.innerHTML = html; tip.hidden = false;
+    const r = tip.getBoundingClientRect();
+    let left = x + 14, top = y + 14;
+    if (left + r.width > innerWidth - 8) left = x - r.width - 14;
+    if (top + r.height > innerHeight - 8) top = y - r.height - 14;
+    tip.style.left = Math.max(8, left) + "px"; tip.style.top = Math.max(8, top) + "px";
+  }
+  function hideTip() { tip.hidden = true; }
+  function niceTicks(lo, hi, n = 4) {
+    const span = hi - lo || 1, raw = span / n, mag = Math.pow(10, Math.floor(Math.log10(raw)));
+    const step = [1, 2, 2.5, 5, 10].map((m) => m * mag).find((s) => span / s <= n + 0.5) || mag * 10;
+    const out = []; for (let v = Math.ceil(lo / step) * step; v <= hi + 1e-9; v += step) out.push(+v.toFixed(6));
+    return out;
+  }
+
+  // ---------- page chrome ----------
+  function renderFacts() {
+    const all = Object.values(data.benchmarks).flatMap((b) => b.episodes);
+    const ok = all.filter((e) => e.success).length;
+    const decisions = all.reduce((s, e) => s + e.decisions_count, 0);
+    const frames = all.reduce((s, e) => s + e.steps, 0);
+    const uniq = (xs) => [...new Set(xs)];
+    const scales = uniq(all.map((e) => e.time_limit_scale ?? (e.episode_step_limit ? +(e.episode_step_limit / e.max_episode_steps).toFixed(2) : 1)));
+    const caps = uniq(all.map((e) => e.max_decisions ?? null));
+    const scaleText = scales.map((s) => `× ${s}`).join(" / ");
+    const capText = caps.map((c) => (c == null ? "无" : c)).join(" / ");
+    const items = [
+      ["回合", all.length, ""], ["成功", `${ok} / ${all.length}`, ok ? "" : "fail"],
+      ["决策（离散样本）", decisions.toLocaleString(), ""], ["env 步（连续帧）", frames.toLocaleString(), ""],
+      ["时间上限", scaleText, ""], ["决策上限", capText, ""],
+    ];
+    $("#facts").innerHTML = items.map(([k, v, c]) => `<div class="fact ${c}"><span class="label">${k}</span><b class="tnum">${v}</b></div>`).join("");
+    const seeds = uniq(Object.values(data.benchmarks).flatMap((b) => {
+      const counts = {}; b.episodes.forEach((e) => { counts[e.task] = (counts[e.task] || 0) + 1; }); return Object.values(counts);
+    }));
+    $("#limits-note").textContent = `每个任务的时间上限是原值的 ${scales.join(" / ")} 倍，决策次数上限：${capText}；每个任务 ${seeds.join(" / ")} 个种子。`;
+    $("#page-title").textContent = data.title || "TacClaw Rollout 浏览";
+    $("#generated").textContent = data.generated || "";
+    document.querySelectorAll(".output-root").forEach((n) => { n.textContent = `${data.output_root}/`; });
+  }
+  function renderTabs() {
+    $("#tabs").innerHTML = Object.keys(data.benchmarks).map((b) =>
+      `<button role="tab" aria-selected="${b === bench}" data-b="${b}">${BENCH_LABEL[b]} · ${data.benchmarks[b].episodes.length}</button>`).join("");
+    $("#tabs").querySelectorAll("button").forEach((btn) => btn.addEventListener("click", () => selectBench(btn.dataset.b, 0, true)));
+    const b = data.benchmarks[bench];
+    $("#bench-note").textContent = `${b.fps} Hz · 数据集 ${b.dataset_root} · 共 ${b.total_frames.toLocaleString()} 帧`;
+  }
+  function renderRail() {
+    const eps = data.benchmarks[bench].episodes;
+    $("#rail").innerHTML = eps.map((e, i) => {
+      const best = e.distances ? Math.min(...e.distances) : null;
+      return `<button class="ep" data-i="${i}" aria-current="${i === epIdx}">
+        <span class="ep-task">${esc(e.task)}</span>
+        <span class="ep-instr">${esc(e.instruction)}</span>
+        <span class="ep-meta"><span class="pill ${e.success ? "ok" : "fail"}">${e.success ? "✓ 成功" : "✕ 失败"} · ${END[e.end_reason] || e.end_reason}</span>
+          <span class="tnum">${e.decisions_count} 次决策</span>${best != null ? `<span class="tnum">离目标最近 ${best.toFixed(2)} m</span>` : ""}</span>
+      </button>`;
+    }).join("");
+    $("#rail").querySelectorAll(".ep").forEach((b) => b.addEventListener("click", () => selectBench(bench, +b.dataset.i, true)));
+  }
+
+  function selectBench(b, i, push) {
+    bench = b; epIdx = i; ep = data.benchmarks[b].episodes[i];
+    renderTabs(); renderRail(); renderInspector(); renderInput();
+    if (push) { try { history.replaceState(null, "", `#${b}-${i}`); } catch (_) {} }
+  }
+
+  // ---------- inspector ----------
+  function renderInspector() {
+    cancelAnimationFrame(raf); lastDecision = -1;
+    const e = ep;
+    const minutes = (s) => (s / 60).toFixed(1);
+    $("#inspector").innerHTML = `
+      <div class="ep-title">
+        <span class="label mono">${esc(e.source_id)} · episode_index ${e.episode_index}</span>
+        <h2>${esc(e.instruction)}</h2>
+        <div class="chips">
+          <span class="pill ${e.success ? "ok" : "fail"}">${e.success ? "✓ 成功" : "✕ 失败"} · ${END[e.end_reason] || e.end_reason}</span>
+          <span>步数 <b class="tnum">${e.steps}</b> / 上限 <b class="tnum">${e.episode_step_limit}</b>（原 ${e.max_episode_steps}）</span>
+          <span>决策 <b class="tnum">${e.decisions_count}</b></span>
+          <span>仿真时长 <b class="tnum">${(e.steps / e.fps).toFixed(1)} s</b></span>
+          <span>真实用时 <b class="tnum">${minutes(e.wall_seconds)} min</b>（JEMM ${minutes(e.policy_seconds)} min）</span>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head"><h3>视频</h3><p>上：场景相机｜腕部鱼眼相机；下：触觉拼图（左右两块垫各一行）。两路同步播放。</p></div>
+        <div class="videos">
+          <video id="v-rgb" src="${e.videos.rgb}" controls playsinline muted preload="auto"></video>
+          <video id="v-tac" class="tac" src="${e.videos.tactile}" playsinline muted preload="auto"></video>
+        </div>
+        <div class="readout" id="readout"></div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head"><h3>离散结果：每次决策</h3><p>Show-Harness 格式 · <span class="mono">${esc(e.showharness_dir)}/actions.jsonl</span> · 点一段或一行跳到视频对应位置</p></div>
+        <div id="strip"></div>
+        <div class="legend">${["x", "y", "z", "grasp", "release"].map((k) => `<span class="sw k-${k}"><i></i>${KIND_LABEL[k]}</span>`).join("")}<span>宽度 = 这个动作用的 env 步数</span></div>
+        <div class="table-scroll" id="dec-scroll"><table id="dec-table"></table></div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head"><h3>连续结果：每个 env 步</h3><p>LeRobot v3 · <span class="mono">${esc(data.benchmarks[bench].dataset_root)}</span> · <code>action</code> 前三个数是发给 IK 的目标位置</p></div>
+        <div class="chart-box">
+          <div class="legend"><span class="sw ln k-x"><i></i>x</span><span class="sw ln k-y"><i></i>y</span><span class="sw ln k-z"><i></i>z</span><span>目标位置（米，机器人基座坐标系）· 悬停看数值，点击跳转</span></div>
+          <div id="trace"></div>
+        </div>
+        <div class="charts-2">
+          <div class="chart-box">
+            <span class="label">手的俯视轨迹（每次决策前的位置）· 物体坐标只给 JEMM 看</span>
+            <div id="topdown"></div>
+          </div>
+          <div class="chart-box">
+            <span class="label">${e.target ? `每次决策前，手到要抓的 ${esc(e.target)} 的距离` : "离目标的距离"}</span>
+            <div id="dist"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head"><h3>原始记录</h3><p>同一个动作在两份数据里的样子</p></div>
+        <div class="records">
+          <div><span class="label">离散 · actions.jsonl 第 ${e.sample_decision_record.step + 1} 行（step ${e.sample_decision_record.step}）</span><pre>${esc(JSON.stringify(e.sample_decision_record, null, 2))}</pre></div>
+          <div><span class="label">连续 · 这个动作中的第 ${e.sample_frame_row.frame_index} 帧</span><pre>${esc(JSON.stringify(e.sample_frame_row, (k, v) => (Array.isArray(v) ? v.map((x) => (typeof x === "number" ? +x.toFixed(4) : x)) : v), 2))}</pre></div>
+        </div>
+      </div>`;
+
+    renderDecisionTable();
+    const rgb = $("#v-rgb"), tac = $("#v-tac");
+    const sync = () => { if (Math.abs(tac.currentTime - rgb.currentTime) > 0.12) tac.currentTime = rgb.currentTime; };
+    rgb.addEventListener("play", () => { sync(); tac.play().catch(() => {}); loop(); });
+    rgb.addEventListener("pause", () => { tac.pause(); sync(); update(); });
+    rgb.addEventListener("seeked", () => { sync(); update(); });
+    rgb.addEventListener("ratechange", () => { tac.playbackRate = rgb.playbackRate; });
+    rgb.addEventListener("loadedmetadata", () => update());
+    drawAll();
+    update();
+  }
+
+  function loop() {
+    cancelAnimationFrame(raf);
+    const step = () => { const rgb = $("#v-rgb"); if (!rgb) return; update(); const tac = $("#v-tac"); if (tac && Math.abs(tac.currentTime - rgb.currentTime) > 0.25) tac.currentTime = rgb.currentTime; if (!rgb.paused) raf = requestAnimationFrame(step); };
+    raf = requestAnimationFrame(step);
+  }
+  function currentFrame() { const rgb = $("#v-rgb"); const n = ep.frames.x.length; return Math.min(n - 1, Math.max(0, Math.floor((rgb ? rgb.currentTime : 0) * ep.fps + 1e-6))); }
+  function seekFrame(f) { const rgb = $("#v-rgb"); if (!rgb) return; rgb.currentTime = (f + 0.5) / ep.fps; update(f); }
+
+  function update(forced) {
+    if (!ep || !$("#readout")) return;
+    const f = forced ?? currentFrame();
+    const d = ep.frames.decision[f], dec = ep.decisions[d];
+    $("#readout").innerHTML = `<span>第 <b class="tnum">${f}</b> 帧 / ${ep.frames.x.length}</span><span><b class="tnum">${(f / ep.fps).toFixed(2)}</b> s</span>
+      <span>决策 <b class="tnum">${d}</b> ${tokChip(dec.token)}</span><span>夹爪 <b>${ep.frames.closed[f] ? "闭合" : "张开"}</b></span><span>触觉 <b>${ep.frames.contact[f] ? "有接触" : "无接触"}</b></span>`;
+    document.querySelectorAll(".playhead").forEach((ph) => { const x = ph.dataset.x0 * 1 + (ph.dataset.w * 1) * (f + 0.5) / ep.frames.x.length; ph.setAttribute("x1", x); ph.setAttribute("x2", x); });
+    const now = $("#td-now"); if (now) { const p = topdownXY(dec.ee); now.setAttribute("cx", p[0]); now.setAttribute("cy", p[1]); }
+    const dnow = $("#dist-now"); if (dnow && ep.distances) { dnow.setAttribute("cx", distX(d)); dnow.setAttribute("cy", distY(ep.distances[d])); }
+    if (d !== lastDecision) {
+      document.querySelectorAll("#dec-table tr.now").forEach((r) => r.classList.remove("now"));
+      const row = document.querySelector(`#dec-table tr[data-d="${d}"]`);
+      if (row) {
+        row.classList.add("now");
+        const box = $("#dec-scroll");
+        if (row.offsetTop < box.scrollTop + 30 || row.offsetTop > box.scrollTop + box.clientHeight - 40) box.scrollTop = row.offsetTop - box.clientHeight / 2;
+      }
+      lastDecision = d;
+    }
+  }
+
+  function renderDecisionTable() {
+    const head = `<thead><tr><th class="num">step</th><th>抽中的动作</th><th>8 个动作的概率</th><th>最高概率</th><th class="num">置信度</th><th class="num">帧</th><th class="num">步数</th><th class="num">实际位移</th><th>夹爪</th></tr></thead>`;
+    const rows = ep.decisions.map((d) => {
+      const top = d.probs.indexOf(Math.max(...d.probs));
+      const bars = d.probs.map((p, i) => {
+        const h = Math.max(1, Math.round(p * 22)), x = i * 12;
+        return `<rect class="track" x="${x}" y="0" width="9" height="22" rx="1.5"></rect><rect class="bar k-${KIND[TOKENS[i]]}" x="${x}" y="${22 - h}" width="9" height="${h}" rx="1.5"></rect>${TOKENS[i] === d.token ? `<rect class="pick" x="${x - 1}" y="-1" width="11" height="24" rx="2"></rect>` : ""}`;
+      }).join("");
+      const label = TOKENS.map((t, i) => `${t} ${(d.probs[i] * 100).toFixed(1)}%`).join("，");
+      return `<tr data-d="${d.step}" data-f="${d.first_frame}">
+        <td class="num">${d.step}</td><td>${tokChip(d.token)}</td>
+        <td><svg class="probs" width="96" height="22" viewBox="0 -1 96 24" role="img" aria-label="${label}" data-probs="${d.step}">${bars}</svg></td>
+        <td>${TOKENS[top] === d.token ? "同抽中" : tokChip(TOKENS[top])} <span class="mono">${(d.probs[top] * 100).toFixed(0)}%</span></td>
+        <td class="num">${d.confidence.toFixed(2)}</td>
+        <td class="num">${d.first_frame}–${d.first_frame + d.frame_count - 1}</td><td class="num">${d.frame_count}</td>
+        <td class="num">${d.travelled_m == null ? "—" : (d.travelled_m * 100).toFixed(1) + " cm"}</td>
+        <td>${d.gripper_closed ? "闭合" : "张开"}</td></tr>`;
+    }).join("");
+    $("#dec-table").innerHTML = head + `<tbody>${rows}</tbody>`;
+    $("#dec-table").querySelectorAll("tbody tr").forEach((tr) => tr.addEventListener("click", () => seekFrame(+tr.dataset.f)));
+    $("#dec-table").querySelectorAll("svg.probs").forEach((s) => {
+      s.addEventListener("mousemove", (ev) => {
+        const d = ep.decisions[+s.dataset.probs];
+        showTip(`<b>step ${d.step} · 抽中 ${d.token}</b>` + TOKENS.map((t, i) => `<span class="mono">${t.padEnd(9, " ")} ${(d.probs[i] * 100).toFixed(1).padStart(5, " ")}%</span>`).join(""), ev.clientX, ev.clientY);
+      });
+      s.addEventListener("mouseleave", hideTip);
+    });
+  }
+
+  // ---------- charts ----------
+  let topdownXY = () => [0, 0], distX = () => 0, distY = () => 0;
+
+  function drawAll() { drawStrip(); drawTrace(); drawTopdown(); drawDist(); update(); }
+
+  function drawStrip() {
+    const host = $("#strip"); if (!host) return; host.innerHTML = "";
+    const W = Math.max(280, host.clientWidth), H = 46, top = 4, bh = 26, n = ep.frames.x.length;
+    const svg = el("svg", { width: W, height: H, viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": "决策时间线" }, host);
+    const sx = (f) => (f / n) * W;
+    ep.decisions.forEach((d) => {
+      const x = sx(d.first_frame), w = Math.max(1, sx(d.first_frame + d.frame_count) - x - 2);
+      const g = el("g", { class: `k-${KIND[d.token]}` }, svg);
+      const r = el("rect", { class: "seg", x, y: top, width: w, height: bh, rx: 3 }, g);
+      if (w >= 20) { const t = el("text", { class: "seg-label" + (KIND[d.token] === "grasp" ? " on-yellow" : ""), x: x + w / 2, y: top + bh / 2 + 3.5, "text-anchor": "middle" }, g); t.textContent = SHORT[d.token]; }
+      r.addEventListener("click", () => seekFrame(d.first_frame));
+      r.addEventListener("mousemove", (ev) => showTip(`<b>step ${d.step} · ${d.token}</b><span class="mono">帧 ${d.first_frame}–${d.first_frame + d.frame_count - 1}（${d.frame_count} 步）</span><span class="mono">置信度 ${d.confidence.toFixed(2)}</span>`, ev.clientX, ev.clientY));
+      r.addEventListener("mouseleave", hideTip);
+    });
+    const ticks = niceTicks(0, n / ep.fps, 6);
+    ticks.forEach((s) => { const x = sx(s * ep.fps); if (x > W - 10) return; const t = el("text", { class: "ann", x, y: H - 2, "text-anchor": x < 10 ? "start" : "middle" }, svg); t.textContent = `${s}s`; });
+    el("line", { class: "playhead", x1: 0, x2: 0, y1: 0, y2: top + bh + 4, "data-x0": 0, "data-w": W }, svg);
+  }
+
+  function drawTrace() {
+    const host = $("#trace"); if (!host) return; host.innerHTML = "";
+    const W = Math.max(280, host.clientWidth), H = 250, m = { l: 48, r: 14, t: 8, b: 74 };
+    const pw = W - m.l - m.r, ph = H - m.t - m.b, n = ep.frames.x.length;
+    const all = ep.frames.x.concat(ep.frames.y, ep.frames.z);
+    let lo = Math.min(...all), hi = Math.max(...all); const pad = (hi - lo) * 0.08 || 0.02; lo -= pad; hi += pad;
+    const ticks = niceTicks(lo, hi, 4);
+    const sx = (f) => m.l + (f / (n - 1)) * pw, sy = (v) => m.t + (1 - (v - lo) / (hi - lo)) * ph;
+    const svg = el("svg", { width: W, height: H, viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": "逐帧目标位置 x y z" }, host);
+    const grid = el("g", { class: "grid" }, svg);
+    ticks.forEach((v) => { el("line", { x1: m.l, x2: m.l + pw, y1: sy(v), y2: sy(v) }, grid); const t = el("text", { class: "ann", x: m.l - 6, y: sy(v) + 3.5, "text-anchor": "end" }, svg); t.textContent = v.toFixed(2); });
+    ["x", "y", "z"].forEach((k) => {
+      const pts = ep.frames[k].map((v, f) => `${sx(f).toFixed(1)},${sy(v).toFixed(1)}`).join(" ");
+      el("polyline", { class: `series s-${k}`, points: pts }, svg);
+      const last = ep.frames[k][n - 1];
+      const t = el("text", { class: "ann ink", x: m.l + pw + 4, y: sy(last) + 3.5 }, svg); t.textContent = k;
+    });
+    // Two status rows: gripper closed, tactile contact.
+    const rows = [["closed", "夹爪闭合"], ["contact", "触觉接触"]];
+    rows.forEach(([key, label], ri) => {
+      const y = m.t + ph + 22 + ri * 18;
+      el("rect", { class: "flag-bg", x: m.l, y, width: pw, height: 10, rx: 2 }, svg);
+      let start = -1;
+      for (let f = 0; f <= n; f++) {
+        const on = f < n && ep.frames[key][f];
+        if (on && start < 0) start = f;
+        if (!on && start >= 0) { el("rect", { class: "flag", x: sx(start), y, width: Math.max(1.5, sx(f) - sx(start)), height: 10 }, svg); start = -1; }
+      }
+      const t = el("text", { class: "ann", x: m.l - 6, y: y + 8.5, "text-anchor": "end" }, svg); t.textContent = label;
+    });
+    const xt = niceTicks(0, n / ep.fps, 6);
+    xt.forEach((s) => { const x = sx(Math.min(n - 1, s * ep.fps)); const t = el("text", { class: "ann", x, y: H - 6, "text-anchor": "middle" }, svg); t.textContent = `${s}s`; });
+    el("line", { class: "playhead", x1: m.l, x2: m.l, y1: m.t, y2: m.t + ph + 58, "data-x0": m.l, "data-w": pw }, svg);
+    const cross = el("line", { class: "crosshair", x1: 0, x2: 0, y1: m.t, y2: m.t + ph, visibility: "hidden" }, svg);
+    const hit = el("rect", { class: "hit", x: m.l, y: m.t, width: pw, height: ph + 58 }, svg);
+    const frameAt = (ev) => { const r = svg.getBoundingClientRect(); return Math.round(Math.min(1, Math.max(0, (ev.clientX - r.left - m.l) / pw)) * (n - 1)); };
+    hit.addEventListener("mousemove", (ev) => {
+      const f = frameAt(ev), d = ep.decisions[ep.frames.decision[f]];
+      cross.setAttribute("x1", sx(f)); cross.setAttribute("x2", sx(f)); cross.setAttribute("visibility", "visible");
+      showTip(`<b>第 ${f} 帧 · ${(f / ep.fps).toFixed(2)} s</b><span class="mono">x ${fmt(ep.frames.x[f], 4)}  y ${fmt(ep.frames.y[f], 4)}  z ${fmt(ep.frames.z[f], 4)}</span><span>决策 ${d.step} ${tokChip(d.token)}</span><span>夹爪${ep.frames.closed[f] ? "闭合" : "张开"} · ${ep.frames.contact[f] ? "有接触" : "无接触"}</span>`, ev.clientX, ev.clientY);
+    });
+    hit.addEventListener("mouseleave", () => { cross.setAttribute("visibility", "hidden"); hideTip(); });
+    hit.addEventListener("click", (ev) => seekFrame(frameAt(ev)));
+  }
+
+  function drawTopdown() {
+    const host = $("#topdown"); if (!host) return; host.innerHTML = "";
+    const W = Math.max(260, host.clientWidth), H = Math.min(360, Math.max(260, W * 0.8)), m = { l: 44, r: 16, t: 12, b: 32 };
+    const objs = Object.entries(ep.objects);
+    const pts = ep.decisions.map((d) => d.ee);
+    const xs = pts.map((p) => p[0]).concat(objs.map(([, p]) => p[0])), ys = pts.map((p) => p[1]).concat(objs.map(([, p]) => p[1]));
+    // Horizontal: y (robot left is +y, drawn to the left as seen from behind the robot); vertical: x forward, up.
+    let xlo = Math.min(...xs), xhi = Math.max(...xs), ylo = Math.min(...ys), yhi = Math.max(...ys);
+    const pw = W - m.l - m.r, ph = H - m.t - m.b;
+    const span = Math.max((xhi - xlo) / ph, (yhi - ylo) / pw) * 1.12 || 0.01;
+    const xc = (xlo + xhi) / 2, yc = (ylo + yhi) / 2;
+    const px = (y) => m.l + pw / 2 - (y - yc) / span, py = (x) => m.t + ph / 2 - (x - xc) / span;
+    topdownXY = (p) => [px(p[1]), py(p[0])];
+    const svg = el("svg", { width: W, height: H, viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": "手的俯视轨迹与物体位置" }, host);
+    const g = el("g", { class: "grid" }, svg);
+    niceTicks(xc - (ph / 2) * span, xc + (ph / 2) * span, 4).forEach((v) => { el("line", { x1: m.l, x2: m.l + pw, y1: py(v), y2: py(v) }, g); const t = el("text", { class: "ann", x: m.l - 6, y: py(v) + 3.5, "text-anchor": "end" }, svg); t.textContent = v.toFixed(2); });
+    niceTicks(yc - (pw / 2) * span, yc + (pw / 2) * span, 4).forEach((v) => { el("line", { x1: px(v), x2: px(v), y1: m.t, y2: m.t + ph }, g); const t = el("text", { class: "ann", x: px(v), y: H - 16, "text-anchor": "middle" }, svg); t.textContent = v.toFixed(2); });
+    const ax = el("text", { class: "ann", x: m.l + pw / 2, y: H - 2, "text-anchor": "middle" }, svg); ax.textContent = "y（米，左正）";
+    const ay = el("text", { class: "ann", x: 4, y: m.t + 8 }, svg); ay.textContent = "x 前";
+    objs.forEach(([name, p]) => {
+      const isT = name === ep.target, [cx, cy] = [px(p[1]), py(p[0])];
+      el("circle", { class: "obj" + (isT ? " target" : ""), cx, cy, r: isT ? 6 : 4.5 }, svg);
+      const t = el("text", { class: "obj-label" + (isT ? " target" : ""), x: cx + 8, y: cy + 4 }, svg);
+      t.textContent = name.replace(/_\d+$/, "").replace(/^akita_/, "") + (isT ? "（要抓）" : "");
+    });
+    el("polyline", { class: "path-line", points: pts.map((p) => topdownXY(p).map((v) => v.toFixed(1)).join(",")).join(" ") }, svg);
+    const s0 = topdownXY(pts[0]), s1 = topdownXY(pts[pts.length - 1]);
+    el("circle", { class: "path-start", cx: s0[0], cy: s0[1], r: 5 }, svg);
+    el("circle", { class: "path-end", cx: s1[0], cy: s1[1], r: 4 }, svg);
+    el("circle", { class: "path-now", id: "td-now", cx: s0[0], cy: s0[1], r: 6 }, svg);
+    const lg = el("text", { class: "ann", x: m.l + pw, y: m.t + 10, "text-anchor": "end" }, svg); lg.textContent = "○ 起点  ● 终点  ◉ 当前";
+  }
+
+  function drawDist() {
+    const host = $("#dist"); if (!host) return; host.innerHTML = "";
+    if (!ep.distances) { host.innerHTML = `<p class="empty-note">这个任务是开抽屉，指令里没有要抓的物体，所以不画距离。</p>`; return; }
+    const W = Math.max(260, host.clientWidth), H = Math.min(360, Math.max(260, W * 0.8)), m = { l: 44, r: 16, t: 12, b: 32 };
+    const pw = W - m.l - m.r, ph = H - m.t - m.b, d = ep.distances, n = d.length;
+    const hi = Math.max(...d) * 1.15, ticks = niceTicks(0, hi, 4);
+    distX = (i) => m.l + (n > 1 ? i / (n - 1) : 0) * pw; distY = (v) => m.t + (1 - v / hi) * ph;
+    const svg = el("svg", { width: W, height: H, viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": "手到目标物体的距离" }, host);
+    const g = el("g", { class: "grid" }, svg);
+    ticks.forEach((v) => { el("line", { x1: m.l, x2: m.l + pw, y1: distY(v), y2: distY(v) }, g); const t = el("text", { class: "ann", x: m.l - 6, y: distY(v) + 3.5, "text-anchor": "end" }, svg); t.textContent = v.toFixed(2); });
+    niceTicks(0, n - 1, 5).forEach((v) => { const t = el("text", { class: "ann", x: distX(v), y: H - 16, "text-anchor": "middle" }, svg); t.textContent = v; });
+    const ax = el("text", { class: "ann", x: m.l + pw / 2, y: H - 2, "text-anchor": "middle" }, svg); ax.textContent = "决策 step";
+    const ay = el("text", { class: "ann", x: 4, y: m.t + 8 }, svg); ay.textContent = "米";
+    el("polyline", { class: "dist-line", points: d.map((v, i) => `${distX(i).toFixed(1)},${distY(v).toFixed(1)}`).join(" ") }, svg);
+    const bi = d.indexOf(Math.min(...d));
+    el("circle", { class: "path-end", cx: distX(bi), cy: distY(d[bi]), r: 4 }, svg);
+    const t = el("text", { class: "ann ink", x: distX(bi), y: distY(d[bi]) + 16, "text-anchor": bi > n * 0.7 ? "end" : "middle" }, svg); t.textContent = `最近 ${d[bi].toFixed(2)} m（step ${bi}）`;
+    el("circle", { class: "path-now", id: "dist-now", cx: distX(0), cy: distY(d[0]), r: 6 }, svg);
+    const hit = el("rect", { class: "hit", x: m.l, y: m.t, width: pw, height: ph }, svg);
+    const at = (ev) => { const r = svg.getBoundingClientRect(); return Math.round(Math.min(1, Math.max(0, (ev.clientX - r.left - m.l) / pw)) * (n - 1)); };
+    hit.addEventListener("mousemove", (ev) => { const i = at(ev), dd = ep.decisions[i]; showTip(`<b>step ${i} · ${dd.token}</b><span class="mono">距离 ${d[i].toFixed(3)} m</span><span class="mono">手 z ${dd.ee[2].toFixed(3)} m</span>`, ev.clientX, ev.clientY); });
+    hit.addEventListener("mouseleave", hideTip);
+    hit.addEventListener("click", (ev) => seekFrame(ep.decisions[at(ev)].first_frame));
+  }
+
+  // ---------- input format ----------
+  function renderInput() {
+    const p = data.prompts, b = p[bench], first = data.benchmarks[bench].episodes[0];
+    $("#sys-prompt").textContent = p.system;
+    const cands = Object.fromEntries(TOKENS.map((t) => [t, p.candidates[t]]));
+    $("#req-body").textContent = JSON.stringify({
+      state: `<说明文字 + 当前观测，${b.user_text.length.toLocaleString()} 字，见右侧>`,
+      questions: { action: { type: "choice", instructions: p.question, criteria: cands } },
+      images: ["<场景相机 PNG，base64>", "<腕部相机 PNG，base64>", "<触觉拼图 PNG，base64>"],
+    }, null, 2);
+    $("#prompt-imgs").innerHTML = [["agentview", "图 1 · 场景相机（224×224）"], ["wrist", "图 2 · 腕部鱼眼相机（224×224）"], ["tactile", "图 3 · 触觉拼图（原尺寸 1542×626）"]]
+      .map(([k, c]) => `<figure><img src="${b.images[k]}" alt="${c}" loading="lazy"><figcaption>${c}</figcaption></figure>`).join("");
+    const lines = b.user_text.split("\n");
+    let inObjects = false;
+    $("#user-text").innerHTML = lines.map((line) => {
+      const h = /^(State:|INPUTS|ACTIONS|HOW TO ACT|CURRENT OBSERVATION|Question:|Candidates:|Answer with exactly one candidate label\.)/.test(line);
+      if (/^Object positions/.test(line)) inObjects = true; else if (inObjects && !/^\s{2}\S/.test(line)) inObjects = false;
+      const cls = h ? "hl" : (inObjects ? "priv" : "");
+      return cls ? `<span class="${cls}">${esc(line)}</span>` : esc(line);
+    }).join("\n");
+    const at = b.attempt, probs = TOKENS.map((t) => at.probabilities[t]), top = probs.indexOf(Math.max(...probs));
+    $("#out-table").innerHTML = `<thead><tr><th>标签</th><th>候选动作</th><th>概率</th><th class="num">数值</th><th></th></tr></thead><tbody>` +
+      TOKENS.map((t, i) => `<tr><td class="mono">${String.fromCharCode(65 + i)}</td><td>${tokChip(t)}</td>
+        <td><span class="bar k-${KIND[t]}" style="width:${Math.max(2, probs[i] * 160).toFixed(0)}px"></span></td>
+        <td class="num">${(probs[i] * 100).toFixed(1)}%</td>
+        <td>${i === top ? "最高（服务端的 choice）" : ""}${t === b.decision ? (i === top ? " · " : "") + "<b>抽中</b>" : ""}</td></tr>`).join("") + "</tbody>";
+    $("#out-notes").innerHTML = `
+      <h3>这次调用（${esc(first.source_id)}，step ${b.call_index}）</h3>
+      <ul class="notes">
+        <li>JEMM 不生成文字，直接读 A–H 八个标签 token 的 logits，除以多模态温度 1.395 后做 softmax，得到 8 个概率，每次都是合法输出。</li>
+        <li>置信度 = 最高的那个概率 = <b class="tnum">${at.confidence.toFixed(3)}</b>。低于 JEMM 的阈值 0.987，记为 <code>below_threshold: ${at.below_threshold}</code>，但动作照常执行。</li>
+        <li>服务端返回的 <code>choice</code> 是概率最高的动作；rollout 不用它，而是按 8 个概率抽样，这次抽中 ${tokChip(b.decision)}。同一种子可复现。</li>
+        <li>模型 <code>${esc(at.model)}</code>，这次调用 ${at.latency_s.toFixed(2)} 秒。</li>
+      </ul>`;
+  }
+
+  // ---------- data format ----------
+  function renderFormat() {
+    $("#tree").textContent = [
+      `${data.output_root}/`,
+      "├── showharness/<benchmark>/<任务>/rollout_<种子>/   ← 离散：每次决策一条（Show-Harness 格式）",
+      "│   ├── agentview/0000.png …   决策时的场景相机图（发给 JEMM 的那张）",
+      "│   ├── wrist/0000.png …       同一时刻的腕部相机图",
+      "│   ├── tactile/0000.png …     同一时刻的触觉拼图",
+      "│   ├── actions.jsonl          每次决策一行",
+      "│   └── metadata.json          任务、种子、成败、各动作次数",
+      "├── lerobot_v3/<benchmark>/                          ← 连续：每个 env 步一帧（LeRobot v3）",
+      "│   ├── meta/info.json  meta/episodes/*.parquet  meta/tasks.parquet  meta/stats.json",
+      "│   ├── meta/published_rollouts.jsonl               回合 ID ↔ episode_index",
+      "│   ├── data/chunk-000/file-*.parquet               每帧一行的数值",
+      "│   └── videos/<相机>/chunk-000/file-*.mp4          场景|腕部拼接、触觉拼图",
+      "└── <benchmark>/…/results.jsonl, episode_*/gpt_calls/calls.jsonl   结果与调用日志（不是训练数据）",
+    ].join("\n");
+    const disc = [
+      ["step", "第几次决策，等于连续数据里的 decision_index"], ["token", "选中的离散动作，训练标签"], ["kind", "move / grasp / release"],
+      ["gripper_closed", "决策前夹爪是否闭合"], ["ee_pose", "决策前手的 [x, y, z, qw, qx, qy, qz]，机器人基座坐标系"],
+      ["gripper_width", "决策前两块垫的开口，米（由关节角估算）"], ["agentview / wrist / tactile", "三张图的相对路径"],
+      ["time", "写入时间戳"], ["policy_output", "JEMM 的 8 个概率、置信度、延迟"], ["first_frame / frame_count", "在连续数据里对应的帧"],
+      ["travelled_m", "MV_* 的实际位移，米"],
+    ];
+    $("#disc-fields").innerHTML = `<thead><tr><th>字段</th><th>含义</th></tr></thead><tbody>${disc.map(([k, v]) => `<tr><td>${k}</td><td>${v}</td></tr>`).join("")}</tbody>`;
+    const meaning = {
+      action: "解释器发给 env.step 的 8 个数：目标位置、朝向、夹爪", "observation.state": "录制器给的机器人状态",
+      "observation.tactile.summary": "左右两块垫各 6 个数：是否接触、接触面积、压深、剪切", "observation.images.rgb_dual_view": "视频：场景相机｜腕部相机",
+      "observation.images.tacumi_tactile_composite": "视频：触觉拼图", decision_index: "这一帧属于第几次决策（本方案新增）",
+      reward: "成功回合最后一帧为 1", success: "整个回合的成败", qualified: "与 success 相同", seed: "种子", rollout_id_hash: "回合 ID 的哈希",
+      timestamp: "仿真时间，秒", frame_index: "回合内帧号", episode_index: "回合编号", index: "全局帧号", task_index: "任务编号",
+    };
+    const rows = Object.keys(data.benchmarks).map((b) => [b, data.benchmarks[b].features]);
+    const keys = Object.keys(rows[0][1]);
+    $("#cont-fields").innerHTML = `<thead><tr><th>字段</th><th>Tabero</th><th>RoboLab</th><th>含义</th></tr></thead><tbody>` +
+      keys.map((k) => `<tr><td>${k}</td>${rows.map(([, f]) => `<td class="mono">${f[k] ? (f[k].dtype === "video" ? `video ${f[k].shape[1]}×${f[k].shape[0]}` : `${f[k].dtype}[${f[k].shape.join(",")}]`) : "—"}</td>`).join("")}<td>${meaning[k] || ""}</td></tr>`).join("") + "</tbody>";
+  }
+
+  // ---------- boot ----------
+  fetch("data.json").then((r) => { if (!r.ok) throw new Error(r.status); return r.json(); }).then((json) => {
+    data = json;
+    renderFacts(); renderFormat();
+    const m = /^#(tabero|robolab)-(\d+)$/.exec(location.hash);
+    const b = m ? m[1] : "tabero", i = m ? Math.min(+m[2], data.benchmarks[m[1]].episodes.length - 1) : 0;
+    selectBench(b, i, false);
+    // Redraw the charts only when the width changes (video loads change the height).
+    let t, width = 0;
+    new ResizeObserver((entries) => {
+      const w = Math.round(entries[0].contentRect.width);
+      if (w === width) return;
+      width = w; clearTimeout(t); t = setTimeout(() => { if (ep) drawAll(); }, 120);
+    }).observe($("#inspector"));
+  }).catch((err) => { $("#inspector").innerHTML = `<p class="empty-note">读取 data.json 失败（${esc(err.message)}）。刷新页面再试一次。</p>`; });
+})();
+</script>

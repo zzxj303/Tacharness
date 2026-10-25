@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
+import itertools
 import json
-import shutil
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
 
-from . import MAX_DECISIONS, MAX_RECALLS, RECENT_MOVES
+from . import MAX_RECALLS, RECENT_MOVES
 from .actions import InvalidOutput, parse_decision
 from .interpreter import MOVE_TOKENS, EpisodeEnded, StepAdapter, execute, make_executor
 from .llm import LLMClient, LLMResponse, LLMTransportError
@@ -35,6 +35,9 @@ class EpisodeAdapter(StepAdapter, Protocol):
 
     def observe(self) -> Observation: ...
 
+    def gripper_width_m(self) -> float:
+        """Opening between the two pads, recorded with each decision (not shown to the policy)."""
+
 
 @dataclass
 class Decision:
@@ -43,7 +46,7 @@ class Decision:
 
 
 class Policy(Protocol):
-    def begin_episode(self, benchmark: str, calls_dir: Path) -> None: ...
+    def begin_episode(self, benchmark: str, calls_dir: Path, seed: int) -> None: ...
 
     def decide(self, observation: Observation, recent_moves: list[str], call_index: int) -> Decision: ...
 
@@ -56,7 +59,7 @@ class GPTPolicy:
     def __init__(self, llm: LLMClient) -> None:
         self.llm = llm
 
-    def begin_episode(self, benchmark: str, calls_dir: Path) -> None:
+    def begin_episode(self, benchmark: str, calls_dir: Path, seed: int) -> None:
         self.benchmark = benchmark
         self.calls_dir = calls_dir
         (calls_dir / "system_prompt.txt").write_text(system_prompt(benchmark), encoding="utf-8")
@@ -116,16 +119,22 @@ class GPTPolicy:
 
 
 def run_episode(
-    adapter: EpisodeAdapter, policy: Policy, output_dir: Path, max_decisions: int = MAX_DECISIONS
+    adapter: EpisodeAdapter,
+    policy: Policy,
+    output_dir: Path,
+    max_decisions: int | None = None,
+    seed: int = 0,
 ) -> dict[str, Any]:
     """Ask for one action, execute it to completion, repeat until the episode ends.
 
     The simulation only advances inside ``adapter.step``, so it is paused while
-    the policy is deciding and during re-calls.
+    the policy is deciding and during re-calls. With ``max_decisions`` None the
+    environment's time limit alone ends the episode: every action takes at least
+    one env step.
     """
     calls_dir = output_dir / "gpt_calls"
     calls_dir.mkdir(parents=True, exist_ok=True)
-    policy.begin_episode(adapter.benchmark, calls_dir)
+    policy.begin_episode(adapter.benchmark, calls_dir, seed)
     executor = make_executor(adapter)
 
     start = time.perf_counter()
@@ -133,8 +142,21 @@ def run_episode(
     decisions = 0
     result = StepResult(done=True, reason="max_decisions")
     with (calls_dir / "calls.jsonl").open("w", encoding="utf-8") as log:
-        for call_index in range(max_decisions):
-            decision = policy.decide(adapter.observe(), recent_moves, call_index)
+        for call_index in itertools.count() if max_decisions is None else range(max_decisions):
+            observation = adapter.observe()
+            # The observation item by item, so the decision-level export (README 7.2) can
+            # leave out the privileged object positions.
+            observed = {
+                "time": round(time.time(), 3),
+                "instruction": observation.instruction,
+                "position": [round(float(v), 6) for v in observation.position],
+                "quaternion": [round(float(v), 6) for v in observation.quaternion],
+                "gripper_closed": bool(observation.gripper_closed),
+                "gripper_width_m": round(float(adapter.gripper_width_m()), 6),
+                "objects": {name: [round(float(v), 6) for v in xyz] for name, xyz in observation.objects.items()},
+                "recent_moves": list(recent_moves),
+            }
+            decision = policy.decide(observation, recent_moves, call_index)
             decisions += 1
             first_frame = adapter.steps
             travelled = None
@@ -150,6 +172,7 @@ def run_episode(
                 json.dumps(
                     {
                         "call_index": call_index,
+                        "observation": observed,
                         **decision.record,
                         "decision": decision.token,
                         "first_frame": first_frame,
@@ -202,17 +225,8 @@ def load_results(path: Path) -> dict[int, dict[str, Any]]:
     return {int(row["seed"]): row for row in rows}
 
 
-def finish_episode(results_path: Path, episode_dir: Path, summary: dict[str, Any]) -> None:
-    """Log the outcome. A failed episode is not collected: its frames and images are
-    deleted, and only its decision log (text) is kept as ``failed/<episode>/calls.jsonl``
-    for step statistics."""
-    if not summary["success"] and episode_dir.is_dir():
-        failed_dir = episode_dir.parent / "failed" / episode_dir.name
-        shutil.rmtree(failed_dir, ignore_errors=True)
-        failed_dir.mkdir(parents=True)
-        calls = episode_dir / "gpt_calls" / "calls.jsonl"
-        if calls.is_file():
-            shutil.move(str(calls), str(failed_dir / "calls.jsonl"))
-        shutil.rmtree(episode_dir)
+def finish_episode(results_path: Path, summary: dict[str, Any]) -> None:
+    """Log the outcome. Successful and failed episodes are both collected (README 0.2);
+    write this only after the episode's data is exported, since resume skips the seed."""
     with results_path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(summary, ensure_ascii=False) + "\n")

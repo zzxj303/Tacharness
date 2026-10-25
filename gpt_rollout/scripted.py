@@ -34,7 +34,7 @@ class ScriptedPolicy:
         self.hover_m = hover_m  # approach height above the object's root
         self.place_m = place_m  # release height above the destination's root
 
-    def begin_episode(self, benchmark: str, calls_dir: Path) -> None:
+    def begin_episode(self, benchmark: str, calls_dir: Path, seed: int) -> None:
         self.calls = 0
 
     def decide(self, observation: Observation, recent_moves: list[str], call_index: int) -> Decision:

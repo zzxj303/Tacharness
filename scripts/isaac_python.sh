@@ -13,6 +13,25 @@ export PYTHONPATH="${rollout_root}:${tacharness}:${tacharness}/src:${tacharness}
 # RoboLab scene assets live in the upstream checkout; the TacHarness copy ships none.
 export ROBOLAB_ASSET_DIR="${ROBOLAB_ASSET_DIR:-${rollout_root}/RoboLab/assets}"
 
+# Keep runtime caches and temp files next to the checkout (the system disk may be full);
+# values already set in the environment win.
+export TMPDIR="${TMPDIR:-${rollout_root}/tmp}"
+export XDG_CACHE_HOME="${XDG_CACHE_HOME:-${rollout_root}/.cache}"
+export TRITON_CACHE_DIR="${TRITON_CACHE_DIR:-${XDG_CACHE_HOME}/triton}"
+export TORCHINDUCTOR_CACHE_DIR="${TORCHINDUCTOR_CACHE_DIR:-${XDG_CACHE_HOME}/torchinductor}"
+export CUDA_CACHE_PATH="${CUDA_CACHE_PATH:-${XDG_CACHE_HOME}/nv/ComputeCache}"
+mkdir -p "${TMPDIR}" "${XDG_CACHE_HOME}"
+# System libraries the host lacks, unpacked by scripts/setup_env.sh (libGLU for the
+# MDL SDK that compiles RTX materials; without it camera rendering fails).
+if [[ -d "${rollout_root}/.local/lib" ]]; then
+  export LD_LIBRARY_PATH="${rollout_root}/.local/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+fi
+
+# Isaac Sim's CUDA interop runs a peer-to-peer test on every visible GPU at startup, and
+# fails with out-of-memory on GPUs other processes have filled; expose one GPU (default 0,
+# shared with the JEMM server) unless the caller picks.
+export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0}"
+
 # Tabero sensor assets downloaded by scripts/setup_env.sh.
 export TACBENCHHUB_TACTILE_ASSETS_DIR="${TACBENCHHUB_TACTILE_ASSETS_DIR:-${tacharness}/inputs/assets/vendor/tacbenchhub/external/tabero/datasets/Tactile_Manipulation_Dataset/assets/data}"
 

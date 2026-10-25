@@ -12,6 +12,7 @@ environments, holding the episode's starting orientation (no rotation actions).
 from __future__ import annotations
 
 import importlib.util
+import inspect
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -28,6 +29,8 @@ MOVE_TOKENS = tuple(atomic.MOVE_DIRS)
 GRASP = atomic.GRASP
 RELEASE = atomic.RELEASE
 TOKENS = MOVE_TOKENS + (GRASP, RELEASE)
+# One MV_* in metres: AtomicExec's default, recorded with the decision-level data.
+STEP_M = float(inspect.signature(atomic.AtomicExec).parameters["step_m"].default)
 
 
 class StepAdapter(Protocol):

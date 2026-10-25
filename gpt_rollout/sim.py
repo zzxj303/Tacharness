@@ -24,6 +24,11 @@ from tacumi.visualization import render_tactile_composite
 
 # Tabero's own open/closed test: |joint - open| above cfg.gripper_threshold.
 GRIPPER_CLOSED_THRESHOLD_RAD = 0.05
+# Pad separation at the two known joint angles (README section 5.1): 79.7 mm at 0 deg,
+# about 58 mm at the default close angle. gripper_width_m interpolates linearly between
+# them, so it is an estimate.
+OPEN_PAD_GAP_M = 0.0797
+CLOSED_PAD_GAP_M = 0.058
 
 
 def seed_everything(env: Any, seed: int) -> None:
@@ -63,6 +68,22 @@ def gripper_closed(robot: Any) -> bool:
     joint_ids, _ = robot.find_joints(list(TACUMI_GRIPPER_JOINT_NAMES))
     joint_pos = to_numpy(robot.data.joint_pos)[0, joint_ids]
     return bool(np.max(np.abs(joint_pos)) > GRIPPER_CLOSED_THRESHOLD_RAD)
+
+
+def scale_time_limit(env: Any, scale: float) -> int:
+    """Lengthen the task's own episode time limit by ``scale`` (README 0.1 allows this when
+    collecting) and return the original limit in env steps. IsaacLab reads
+    ``cfg.episode_length_s`` afresh for every time-out check, so this applies after creation."""
+    original_steps = int(env.max_episode_length)
+    env.cfg.episode_length_s *= scale
+    return original_steps
+
+
+def gripper_width_m(robot: Any) -> float:
+    """Estimated opening between the pads, from the mean |angle| of the two finger joints."""
+    joint_ids, _ = robot.find_joints(list(TACUMI_GRIPPER_JOINT_NAMES))
+    angle = float(np.mean(np.abs(to_numpy(robot.data.joint_pos)[0, joint_ids])))
+    return OPEN_PAD_GAP_M - (OPEN_PAD_GAP_M - CLOSED_PAD_GAP_M) * angle / TACUMI_CLOSE_ANGLE_RAD
 
 
 def positions_in_base_frame(robot: Any, positions_w: dict[str, torch.Tensor]) -> dict[str, np.ndarray]:

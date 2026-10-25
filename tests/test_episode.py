@@ -3,7 +3,10 @@ import json
 import numpy as np
 
 from gpt_rollout import MAX_RECALLS
+from gpt_rollout.datasets import export_showharness
 from gpt_rollout.episode import GPTPolicy, StepResult, finish_episode, load_results, run_episode
+from gpt_rollout.interpreter import TOKENS
+from gpt_rollout.jemm import JEMMPolicy, JEMMResponse
 from gpt_rollout.llm import LLMResponse
 from gpt_rollout.prompts import Observation, resize_with_pad
 
@@ -29,6 +32,21 @@ class FakeLLM:
         return LLMResponse(text=text, usage={"total_tokens": 10}, model="fake", latency_s=0.0, attempts=1)
 
 
+class FakeJEMM:
+    """Fixed probabilities, as JEMM returns for an unchanged observation."""
+
+    threshold = 0.99
+
+    def __init__(self, probabilities):
+        self.probabilities = dict(zip(TOKENS, probabilities))
+        self.states = []
+
+    def decide(self, state, images):
+        self.states.append(state)
+        confidence = max(self.probabilities.values())
+        return JEMMResponse(self.probabilities, confidence, "fake-jemm", latency_s=0.0, attempts=1)
+
+
 class FakeAdapter:
     """The TCP covers half of the remaining distance to the commanded target per step."""
 
@@ -46,9 +64,13 @@ class FakeAdapter:
     def tcp_pose(self):
         return self.position.copy(), QUAT.copy()
 
+    def gripper_width_m(self):
+        return 0.0797
+
     def observe(self):
         image = np.zeros((8, 8, 3), dtype=np.uint8)
-        return Observation("do it", image, image, image, self.position.copy(), QUAT.copy(), False, {})
+        objects = {"milk_1": np.array([0.6, 0.1, 0.05])}
+        return Observation("do it", image, image, image, self.position.copy(), QUAT.copy(), False, objects)
 
     def step(self, action):
         self.actions.append(action)
@@ -96,6 +118,8 @@ def test_timeout(tmp_path):
     adapter, llm = FakeAdapter(max_steps=30), FakeLLM([_decision("MV_DOWN")])
     summary = run_episode(adapter, GPTPolicy(llm), tmp_path)
     assert (summary["success"], summary["end_reason"], summary["steps"]) == (False, "time_out", 30)
+    # No decision cap by default: the time limit alone ends the episode.
+    assert summary["max_decisions"] is None and summary["decisions"] == len(_calls(tmp_path))
 
 
 def test_recall_does_not_step_and_gives_up(tmp_path):
@@ -106,21 +130,60 @@ def test_recall_does_not_step_and_gives_up(tmp_path):
     assert _calls(tmp_path)[-1]["frame_count"] == 0
 
 
-def test_failed_episodes_are_set_aside(tmp_path):
+def test_failed_episodes_are_kept(tmp_path):
     results = tmp_path / "results.jsonl"
     for seed, success in ((0, True), (1, False)):
         episode = tmp_path / f"episode_{seed:03d}"
         (episode / "frames").mkdir(parents=True)
         (episode / "frames" / "frame_000000.npz").write_bytes(b"x")
-        (episode / "gpt_calls").mkdir()
-        (episode / "gpt_calls" / "calls.jsonl").write_text("{}\n")
-        (episode / "gpt_calls" / "call_0000_scene.png").write_bytes(b"x")
-        finish_episode(results, episode, {"seed": seed, "success": success})
-    assert (tmp_path / "episode_000" / "frames" / "frame_000000.npz").is_file()
-    assert not (tmp_path / "episode_001").exists()
-    kept = sorted(p.relative_to(tmp_path).as_posix() for p in (tmp_path / "failed").rglob("*") if p.is_file())
-    assert kept == ["failed/episode_001/calls.jsonl"]
+        finish_episode(results, {"seed": seed, "success": success})
+    assert all((tmp_path / f"episode_{seed:03d}" / "frames" / "frame_000000.npz").is_file() for seed in (0, 1))
     assert set(load_results(results)) == {0, 1}
+
+
+def _jemm_episode(tmp_path, seed, probabilities=(0.4, 0.1, 0.1, 0.3, 0.05, 0.05, 0.0, 0.0)):
+    adapter, jemm = FakeAdapter(max_steps=10_000), FakeJEMM(probabilities)
+    summary = run_episode(adapter, JEMMPolicy(jemm), tmp_path, max_decisions=12, seed=seed)
+    return summary, [c["decision"] for c in _calls(tmp_path)], jemm
+
+
+def test_jemm_samples_reproducibly_by_seed(tmp_path):
+    _, first, _ = _jemm_episode(tmp_path / "a", seed=3)
+    _, again, _ = _jemm_episode(tmp_path / "b", seed=3)
+    _, other, _ = _jemm_episode(tmp_path / "c", seed=4)
+    assert first == again and first != other
+    # Zero-probability actions are never drawn.
+    assert not {"GRASP", "RELEASE"} & set(first + other)
+
+
+def test_jemm_record_and_summary(tmp_path):
+    summary, _, jemm = _jemm_episode(tmp_path, seed=0)
+    call = _calls(tmp_path)[0]
+    attempt = call["attempts"][0]
+    assert abs(sum(attempt["probabilities"].values()) - 1.0) < 1e-6 and attempt["below_threshold"]
+    assert set(call["input_images"]) == {"scene", "wrist", "tactile"}
+    assert call["observation"]["objects"] == {"milk_1": [0.6, 0.1, 0.05]}
+    assert "CURRENT OBSERVATION" in jemm.states[0] and "milk_1" in jemm.states[0]
+    assert (summary["policy"], summary["policy_calls"], summary["policy_below_threshold"]) == ("jemm", 12, 12)
+
+
+def test_showharness_export(tmp_path):
+    episode, rollout = tmp_path / "episode_000", tmp_path / "rollout_000"
+    adapter, llm = FakeAdapter(max_steps=10_000), FakeLLM([_decision("MV_RIGHT"), _decision("GRASP")])
+    summary = run_episode(adapter, GPTPolicy(llm), episode, max_decisions=2)
+    assert export_showharness(episode, rollout, {"task": "t", "seed": 0}) == 2
+    rows = [json.loads(line) for line in (rollout / "actions.jsonl").read_text().splitlines()]
+    assert [(r["step"], r["token"], r["kind"]) for r in rows] == [(0, "MV_RIGHT", "move"), (1, "GRASP", "grasp")]
+    assert rows[0]["ee_pose"] == [*START, *QUAT] and rows[0]["gripper_closed"] is False
+    assert rows[1]["first_frame"] == rows[0]["frame_count"]
+    assert sum(r["frame_count"] for r in rows) == summary["steps"]
+    for row in rows:
+        assert all((rollout / row[view]).is_file() for view in ("agentview", "wrist", "tactile"))
+    # No privileged object positions in the decision-level data.
+    assert "milk_1" not in (rollout / "actions.jsonl").read_text()
+    meta = json.loads((rollout / "metadata.json").read_text())
+    assert meta["num_steps"] == 2 and meta["token_counts"] == {"MV_RIGHT": 1, "GRASP": 1}
+    assert not list((episode / "gpt_calls").glob("*.png"))
 
 
 def test_resize_with_pad():

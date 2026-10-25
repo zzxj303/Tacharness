@@ -1,6 +1,8 @@
-# GPT-6 × TacClaw Rollout：RoboLab / Tabero 实现核对文档
+# JEMM × TacClaw Rollout：RoboLab / Tabero 实现核对文档
 
-本文用于**核对实现细节**：在 RoboLab 和 Tabero 上用 GPT-6 作为 VLM 收集 rollout 轨迹，末端执行器使用 TacClaw。
+本文用于**核对实现细节**：在 RoboLab 和 Tabero 上用 VLM 按 Show-Harness 的 meta action 方式控制机器人、收集 rollout 轨迹，末端执行器使用 TacClaw。
+
+**已定（2026-10-24）：策略用 JEMM，取代 GPT-6**（见 1.1 节）。下文沿用的"GPT"字样（包括代码里的 `gpt_rollout/`、`gpt_calls/`）在此之后都指当前策略；GPT-6 的路径仍保留为 `--policy gpt`。
 
 写作约定：
 
@@ -9,7 +11,18 @@
   - `[设计]`：本方案自己的设计，脚手架代码还没有实现；
   - `[代码]`：本目录下的源码，写明文件路径和行号；
   - `[待对齐]`：设计里还没有定义，或者和原仓库代码冲突，需要人来决定。
-- 路径都相对于本目录（`gujie/rollout/`）。行号以 2026-09-30 的代码为准。
+- 路径都相对于本目录（`gujie/rollout/`）。上游仓库的行号以第 0 节表中的 commit 为准，本仓库代码的行号以 2026-10-25 的代码为准。
+
+### 当前状态（2026-10-25）
+
+| | 状态 |
+|---|---|
+| 环境 | 三个运行环境都已建好（第 0 节）：Isaac Sim 5.1、JEMM 服务（int8，单卡）、LeRobot 发布 |
+| 采集流程 | 已实现并跑通：JEMM 选动作 → Show-Harness `AtomicExec` 执行 → 每个回合写出逐帧（LeRobot v3）和逐决策（Show-Harness）两份数据（第 1、4、7 节） |
+| 时间上限 | 两个 benchmark 都是任务原值的两倍，不限决策次数（0.1 节） |
+| 试跑结果 | 两倍时长下 7 个任务各 1 个种子，**全部失败**：手离要抓的物体最近也有 17cm，从没下降到物体的高度（4.4 节）。原时长下的冒烟测试和全量采集的前 11 个回合也全部失败 |
+| 全量采集 | **暂停**，输出已清空。瓶颈是 JEMM 本身，不是时间；继续之前要先定策略怎么改（4.4 节末尾） |
+| 结果浏览 | `scripts/site/build_site.sh` 把一个输出目录做成网页：视频、离散决策、逐帧动作、JEMM 的完整输入输出（7.3 节） |
 
 ---
 
@@ -23,19 +36,48 @@
 
 - TacClaw 就是 Daimon DM25PD04，代码里叫 `tacumi_dm25pd04_v1`，统一定义在 `TacHarness/src/tacumi/embodiment.py`。`[代码]`
 - 接入了 TacClaw 的 RoboLab 在 `TacHarness/src/providers/RoboLab/`，Tabero 在 `TacHarness/src/providers/LIBERO/`。`[代码]`
-- 脚手架代码**还没有实现**，由我们自己写。本文里所有标 `[设计]` 的内容是要实现的目标，不是已有代码的行为。`[设计]`
+- 脚手架代码由我们自己写，在 `gpt_rollout/` 和 `scripts/` 下。标 `[设计]` 的内容是方案的目标；已经实现的部分会同时标 `[代码]` 并写明位置。
 
 ### 上游依赖（不在本仓库里）
 
-本仓库只包含脚手架（`gpt_rollout/`、`scripts/`、`tests/`、`configs/`）。运行前要把下面三个仓库 clone 到本目录下，目录名和 commit 都要一致：
+本仓库只包含脚手架（`gpt_rollout/`、`scripts/`、`tests/`、`configs/`）。运行前要把下面的仓库和模型放到本目录下，目录名和版本都要一致：
 
-| 目录 | 仓库 | commit |
+| 目录 | 来源 | 版本 |
 |---|---|---|
 | `TacHarness/` | https://github.com/LV-Robotics-Lab/TacHarness.git | `c5cf373a50d54151f42fc74dbe87e93922f348a6` |
 | `Show-Harness/` | https://github.com/showlab/Show-Harness.git | `5a3713b6d90c5a5a8c9461e298e091f7cbdcded4` |
-| `RoboLab/` | https://github.com/NVlabs/RoboLab.git | `ad45d4f974725d020f82c2b0d77d78533aeba2b3`（只用它的 `assets/`） |
+| `RoboLab/` | https://github.com/NVlabs/RoboLab.git | `ad45d4f974725d020f82c2b0d77d78533aeba2b3`（只用它的 `assets/`，这些是 Git LFS 文件，要 `git lfs pull --include="assets/**"`，约 6GB） |
+| `Tabero/` | https://github.com/NathanWu7/Tabero.git | `56a3b9055bfe7dc157583cc10e121c7a7781cf8f`（只用于对照） |
+| `models/JEMM/` | https://huggingface.co/MaestroYan/JEMM | `76e3c209e8441fa658221c7ba2725bad2f811176`（LoRA adapter） |
+| `models/Qwen3.8-27B/` | https://huggingface.co/Qwen/Qwen3.8-27B | `1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0`（JEMM 的基座，55.6GB） |
 
-然后运行 `scripts/setup_env.sh` 安装 Isaac Sim 5.1 运行环境，再把 `configs/llm.example.yaml` 复制成 `configs/llm.yaml`，填入端点和 key（`llm.yaml` 不进仓库）。
+运行环境有三个，互相独立：
+
+| 环境 | 用途 | 怎么建 |
+|---|---|---|
+| `TacHarness/.venv-isaacsim51` | Isaac Sim 5.1 仿真和 rollout 循环 | `scripts/setup_env.sh` |
+| `.venv-jemm` | JEMM 服务（torch 2.12.1+cu126、transformers 5.20.2、peft 0.21.2、bitsandbytes 0.50.2、`jemm@6822fe0`） | `uv venv --python 3.12 .venv-jemm`，再装上述包和 `jemm @ git+https://github.com/ypcypc/JEMM@6822fe0fd53c5e6670af6ba99fb2c857a661e532` |
+| `.conda/tacharness-lerobot312` | 发布 LeRobot v3（lerobot 0.6.0） | `TacHarness/scripts/setup_lerobot312_runtime.sh`；设 `TACHARNESS_HF_HOME` 指向环境目录之外，否则脚本会先建出环境目录再报"目录已存在"。脚本最后的自检在这个 commit 上会失败（找不到 `tacharness` 包），不影响使用 |
+
+用 `--policy gpt` 时还要把 `configs/llm.example.yaml` 复制成 `configs/llm.yaml`，填入端点和 key（`llm.yaml` 不进仓库）。
+
+**本机遇到的两个环境问题**（已在 `scripts/` 里处理）`[代码]`：
+
+- 系统缺 `libGLU.so.1`，RTX 材质编译用的 MDL SDK 加载失败，相机渲染随即出错。`scripts/setup_env.sh` 用 `apt-get download libglu1-mesa` 把库解到 `.local/lib`（不需要 root），`scripts/isaac_python.sh` 把它加进 `LD_LIBRARY_PATH`。
+- Isaac Sim 启动时会在所有可见 GPU 上做 P2P 测试，别的进程占满的 GPU 会让它显存不足。`scripts/isaac_python.sh` 默认 `CUDA_VISIBLE_DEVICES=0`。
+
+**运行方法** `[代码]`：
+
+```bash
+scripts/jemm_serve.sh > logs/jemm_serve.log 2>&1 &              # JEMM 服务，GPU 0，int8，端口 8790
+scripts/collect.sh tabero  outputs/collect                        # Tabero 46 个任务，每个 50 个种子，可断点续跑
+scripts/collect.sh robolab outputs/collect                        # RoboLab 120 个任务
+scripts/isaac_python.sh -m gpt_rollout.tabero_run --task-suite libero_object --task-id 7 --num-seeds 1 \
+    --output-root outputs/smoke                                   # 单个任务
+scripts/site/build_site.sh outputs/smoke                          # 把输出做成结果浏览网页（7.3 节）
+```
+
+长时间采集用 `setsid nohup … &` 启动，关掉会话也会继续跑。停止时 Isaac 进程不响应 SIGTERM，要用 SIGKILL。
 
 - [ ] 核对：实现所用的 RoboLab 和 Tabero 都是 `TacHarness/src/providers/` 下的副本，不是上游仓库。
 - [ ] 核对：脚手架实现后，逐条对照本文的第 2–4 节。
@@ -54,10 +96,18 @@
 | 失败终止条件（物体掉落等） | 见第 6 节 | 原样使用 |
 | 开局（初始状态、物体摆放） | benchmark 自带 | 原样使用 |
 
-**例外（已定，2026-10-11）：回合步数上限在收集 rollout 时可以放大。** GPT-6 没有经过训练，原值不够用。放大到多少还没定，先测 GPT 实际需要多少步（第 4.1 节）。表中其他各项仍然不能改。
+**例外（已定，2026-10-11）：回合步数上限在收集 rollout 时可以放大。** GPT-6 没有经过训练，原值不够用。表中其他各项仍然不能改。
 
-- **Tabero 的时间很紧。** 160 步里要完成"接近、抓取、搬运、放下"。GPT 思考时仿真暂停，不占这 160 步。第 4.1 节的脚本实测：一次不出错的抓取放置就要几百步。
-- **测量时的做法（已定，2026-10-11）：** Tabero 关掉超时终止，让回合跑过 160 步，最多 200 次决策；结果里同时记录"是否在原上限内成功"（`success_within_max_episode_steps`）。前 160 步的轨迹和不关超时时完全一样，所以这一项是准确的。RoboLab 保留原超时。
+**已定（2026-10-24）：两个 benchmark 都把每个任务自己的时间上限放大两倍，并去掉"每回合最多 200 次决策"的上限。** 我们是收集 rollout，不是评测。`[代码]`
+
+- 做法：环境建好后把 `cfg.episode_length_s` 乘以 `--time-limit-scale`（默认 2，`gpt_rollout/__init__.py` 的 `TIME_LIMIT_SCALE`）。IsaacLab 每次判断超时都从这个值现算步数（`TacHarness/thirdparty/IsaacLab/source/isaaclab/isaaclab/envs/manager_based_rl_env.py:96-103`），所以建好后再改也生效。实现见 `gpt_rollout/sim.py` 的 `scale_time_limit`。
+- 放大后：Tabero 320 步（`libero_10` 640 步）；RoboLab 各任务为原 `episode_length_s` 的两倍，例如 BananaInBowl 从 750 步变成 1,500 步。
+- 去掉决策上限后，回合只由成功、放大后的超时、物体掉落结束。每个决策至少占 1 个 env 步，所以回合一定会结束。只有关掉超时的测量模式（`--disable-time-out`）仍用 200 次。
+- 每个回合的结果同时记录原上限 `max_episode_steps`、放大后的上限 `episode_step_limit`、倍数 `time_limit_scale`，以及是否在原上限内成功 `success_within_max_episode_steps`（两个 benchmark 都记）。
+- Tabero 放大两倍可能仍然不够：按第 4.2 节，一次不出错的抓放约 500–630 步。两倍时长试跑（4.4 节）里 JEMM 离完成还差得很远，瓶颈不在时间，所以暂不再放大。
+
+- 策略思考时仿真暂停，不占回合时间。
+- **测量模式（2026-10-11 定，仍可用）：** 加 `--disable-time-out`，Tabero 关掉超时终止，最多 200 次决策，用来测一个任务到底要多少步；结果里同时记录"是否在原上限内成功"（`success_within_max_episode_steps`）。正式采集不用这个模式。
 
 以下参数不属于任务本身，按代码默认值处理（已定，2026-10-04）：
 
@@ -78,9 +128,9 @@
 | RoboLab 采哪些任务 | 它自带的全部 120 个 benchmark 任务 |
 | 每个任务采多少条 | 50 条，用 50 个不同的随机种子 |
 | Tabero 的开局 | 不使用示范轨迹，直接采样：用环境的默认重置 |
-| Tabero 的步数上限 | 160 步（`libero_10` 为 320 步），即任务配置的原值。超时、物体掉落两个终止条件也按任务配置保留 |
+| Tabero 的步数上限 | 原值 160 步（`libero_10` 为 320 步）的两倍：320 步（`libero_10` 640 步），见 0.1 节（2026-10-24 改）。超时、物体掉落两个终止条件按任务配置保留 |
 
-合计：Tabero 46 × 50 = 2,300 次 rollout，RoboLab 120 × 50 = 6,000 次 rollout。**已定（2026-10-04）：只记录成功的轨迹**，和 TacHarness 现有的发布工具一致。失败的 rollout 不保存轨迹数据，只在每个任务的 `results.jsonl` 里留一行结果（种子、结束原因、步数、调用次数和花费），用来统计成功率和断点续跑。
+合计：Tabero 46 × 50 = 2,300 次 rollout，RoboLab 120 × 50 = 6,000 次 rollout。**已定（2026-10-24，取代 2026-10-04 的"只记录成功的轨迹"）：成功和失败的轨迹都完整记录**，两者保存的内容相同，用 `success` 区分。每个任务的 `results.jsonl` 仍然每个回合留一行结果（种子、结束原因、步数、调用次数和花费），用来统计成功率和断点续跑。已实现：`gpt_rollout/episode.py:228` 的 `finish_episode` 只追加这一行结果，不再删除失败回合的数据。`[代码]`
 
 ### 两个 benchmark 的现状 `[代码]`
 
@@ -109,22 +159,16 @@ RoboLab 上有两种处理方式：
 
 ### 采集规模
 
-> 本小节按旧设计（每次调用输出 4 行动作，N = 4）估算，已不适用。改成每次一个离散动作后，调用次数等于动作个数，见第 4.1 节的实测。
+按两倍时长试跑（4.4 节）的实测速度，假设每个回合都跑到放大后的上限（JEMM 目前每条都失败，所以就是这种情况），单个 Isaac 进程串行：
 
-N = 4，按每条轨迹都跑到超时的最坏情况算：
+| | 任务数 × 种子 | env 步总数（上限） | 每个回合的真实用时 | 合计 | 数据量（两份合计，约 25KB/帧） |
+|---|---|---|---|---|---|
+| Tabero | 46 × 50 = 2,300 | 约 90 万 | 320 步的任务约 3.5 分钟，`libero_10` 约 6.5 分钟 | 约 7 天 | 约 22GB |
+| RoboLab | 120 × 50 = 6,000 | 约 1,640 万（各任务 `episode_length_s` 合计 10,940 秒 × 2 × 15Hz × 50） | 每步约 1 秒（含 JEMM 决策） | 约半年 | 约 400GB |
 
-| | 任务数 | 轨迹数 | GPT 调用次数上限 |
-|---|---|---|---|
-| Tabero（步数上限 160，`libero_10` 为 320） | 46 | 2,300 | 约 112,000 次 |
-| RoboLab（各任务 `episode_length_s` 合计 10,940 秒） | 120 | 6,000 | 约 2,050,000 次 |
-
-- RoboLab 的任务时限长（平均约 91 秒，有的任务长达 300 秒），所以调用次数上限远高于 Tabero。一个 300 秒的任务单条轨迹就是 1,125 次调用。
-- 成功的轨迹会提前结束，实际次数会少于上限。但即便只有上限的一半，RoboLab 也是百万次量级，单线程跑不完。
-- 如果这个量不可接受，有三个办法，可以组合使用：
-  - RoboLab 上把 N 调大。例如 N = 15（和 pi05 一致），调用次数降到约四分之一；
-  - RoboLab 先只采一部分任务；
-  - 多个仿真实例并行采集。
-- [ ] `[待对齐]` RoboLab 的采集规模是否接受；不接受的话用上面哪个办法。
+- 一次决策平均约 9 个 env 步、JEMM 约 1.5 秒；一个 env 步加渲染、触觉和录制约 0.7–1 秒。
+- 一个 Isaac 进程占 7–9GB 显存，JEMM（int8）占约 31GB。GPU 0 上只放得下 JEMM 加一个 Isaac 进程；每多一张空的 L40S 可以再放 4–5 个 Isaac 进程，共用同一个 JEMM 服务。
+- [ ] `[待对齐]` RoboLab 的采集规模：多要几张卡并行、先采一部分任务，还是减少种子数。
 
 ### 已知会失败的任务
 
@@ -141,16 +185,16 @@ N = 4，按每条轨迹都跑到超时的最坏情况算：
 
 ---
 
-## 1. 整体流程 `[设计]`
+## 1. 整体流程 `[设计]` `[代码]`
 
-**GPT-6 按 Show-Harness 的 meta action 方式控制（已定，2026-10-11）：每次调用只输出一个离散动作，由解释器在仿真里把它执行完，再用新的观测问下一次。** 提示词里要向 GPT 解释每个输入是什么、每个动作做什么。
+**策略按 Show-Harness 的 meta action 方式控制（已定，2026-10-11）：每次调用只输出一个离散动作，由解释器在仿真里把它执行完，再用新的观测问下一次。** 提示词里要向策略解释每个输入是什么、每个动作做什么。
 
 ```
 循环：
-  1. 把当前观测发给 GPT（第 2 节的 6 项输入，加最近 5 个移动动作）
-  2. GPT 输出一个动作（第 3 节）
-  3. 解释器把这个动作执行完，期间的每个 env.step 逐帧录制（第 4 节）
-  4. 回到 1，直到官方规则判定成功，或者超时
+  1. 把当前观测发给策略（第 2 节的 6 项输入，加最近 5 个移动动作）
+  2. 策略给出一个离散动作（第 3 节）
+  3. 解释器把这个动作展开成若干个 env.step 执行完，每一步录一帧（第 4 节）
+  4. 回到 1，直到官方规则判定成功、超时或物体掉落
 ```
 
 - **不使用 benchmark 里的示范动作**，只借开局状态和官方成功判定。
@@ -158,9 +202,52 @@ N = 4，按每条轨迹都跑到超时的最坏情况算：
 - 每次调用互相独立，不带之前的对话。唯一的记忆是提示词里"最近 5 个移动动作，最新的在前"，这是 Show-Harness 仿真 runner 的 meta-action 提示词本来就有的一行（已定，2026-10-11）。
 - 代码：`gpt_rollout/episode.py`（循环）、`gpt_rollout/interpreter.py`（解释器）、`gpt_rollout/prompts.py`（提示词）。`[代码]`
 
+### 1.1 策略：JEMM
+
+**已定（2026-10-24）：用 JEMM 取代 GPT-6。** JEMM 是挂在 Qwen3.8-27B 上的 LoRA（`models/JEMM/`）：给它一段状态、一个问题和 2–32 个候选，它返回每个候选的概率。
+
+| 项目 | 做法 |
+|---|---|
+| 运行 | 单独的服务进程 `scripts/jemm_serve.sh`（在 `.venv-jemm` 里），接口和 JEMM 官方服务相同：`POST /v1/systemone`。rollout 这边是 `gpt_rollout/jemm.py` 的 `JEMMClient` 和 `JEMMPolicy`。`[代码]` |
+| 精度 | **已定（2026-10-24）：先用 int8。** 基座的线性层用 bitsandbytes 的 LLM.int8 量化；LoRA、`lm_head` 和视觉编码器保持原精度，LoRA 不合并（`scripts/jemm_serve.py`）。服务占 GPU 约 30.8GB，单张 46GB 的 L40S 放得下；bf16 约 57GB，要两张卡。JEMM 的温度和阈值是按 bf16 校准的，int8 带来的概率偏移还没测。`[代码]` |
+| 提示 | JEMM 的 system prompt 是训练时固定的，不能换。第 2 节要求解释的内容和每次的观测，都放进它的 `State`（`gpt_rollout/prompts.py` 的 `jemm_state`：说明文字和 GPT 提示词相同，只去掉输出格式那一段）。问题是 `JEMM_QUESTION`；8 个动作是 `Candidates`，描述见 `ACTION_DESCRIPTIONS`。三张图按场景、腕部、触觉的顺序发送。`[代码]` |
+| 输出 | 8 个动作各自的概率。每次都是合法输出，所以第 4 节"输出不合法就重新调用"的规则只适用于 `--policy gpt`。 |
+| 选动作 | **已定（2026-10-24）：按概率采样。** 随机数生成器用回合的种子初始化，同一种子在概率相同时可以复现。RoboLab 50 个种子的开局相同，靠采样才有差异。置信度低于 JEMM 阈值（`decision_config.json` 的 `threshold`，0.987）的调用照常执行，只在日志里标 `below_threshold`。`[代码]` |
+| 记录 | 每次调用的概率、置信度、延迟，记在 `gpt_calls/calls.jsonl` 的 `attempts` 里。`[代码]` |
+
+- 一次调用约 2,200 个 token，其中触觉拼图按原尺寸约占 960 个，在 JEMM 的多模态上限 3,072 以内（实测，2026-10-24）。
+- 同一份输入调用三次，概率完全相同，所以采样是轨迹之间唯一的随机来源。
+
+### 1.2 一次请求长什么样 `[代码]`
+
+**每做一次决策，就发一个独立的请求**：一个回合有多少次决策，就发多少次。请求之间没有对话历史，也不带之前的图片；唯一的记忆是文字里最后那行"最近 5 个移动动作"。JEMM 收到的消息由它自己的 `jemm.contract.mm_messages` 拼成：
+
+```text
+[system]    Choose the best available candidate for the question using only the supplied state.
+            Return exactly one candidate label.                          ← JEMM 训练时固定
+[user]      <图1 场景相机 224×224> <图2 腕部相机 224×224> <图3 触觉拼图 原尺寸>   ← 三张图在前
+            State:
+            <说明文字：输入是什么、坐标系、8 个动作、怎么抓放>               ← 每次都一样（第 2 节要求解释的内容）
+            CURRENT OBSERVATION
+            Task instruction: …
+            Robot state: position / orientation / gripper                  ← 每次都变
+            Object positions (x, y, z): …                                  ← 特权信息，不进训练数据
+            Recent moves, newest first: …
+            Question: Which ONE action should the robot take next to carry out the task instruction?
+            Candidates:
+            A) MV_FWD: move the gripper 2 cm along +x.   …   H) RELEASE: stop the arm, then open the gripper.
+            Answer with exactly one candidate label.
+[assistant] （不生成文字：读下一个 token 是 A–H 的 logits，除以温度 1.395 后 softmax，得到 8 个概率）
+```
+
+- rollout 端发给服务的是 JEMM 官方的 `POST /v1/systemone` 请求体：`state`（上面 State 之后的整段文字）、`questions.action`（`type: choice`，`instructions` 是问题，`criteria` 是 8 个动作的描述）、`images`（三张 PNG 的 base64）。拼装代码在 `gpt_rollout/jemm.py` 的 `JEMMClient.decide`，文字在 `gpt_rollout/prompts.py`。
+- 服务返回 8 个概率、`confidence`（最高的那个概率）和 `choice`（概率最高的动作）。rollout 不用 `choice`，而是按 8 个概率抽样（1.1 节）。
+- 完整的一次请求（文字和三张图）可以在结果浏览网页的"输入格式"一节看到（7.3 节）。
+- JEMM 是用网页操作、工具调用、意图分类这类数据训练的，State 通常很短，候选是工具名之类。这里的 State 是一大段机器人说明加一串三维坐标，离它熟悉的输入很远，可能是它表现差的原因之一（4.4 节）。
+
 ---
 
-## 2. 每次交给 GPT-6 的输入 `[设计]`
+## 2. 每次交给策略的输入 `[设计]`
 
 | # | 内容 | 怎么产生 | 进不进训练数据 |
 |---|---|---|---|
@@ -223,9 +310,9 @@ N = 4，按每条轨迹都跑到超时的最坏情况算：
 
 ---
 
-## 3. GPT-6 的输出 `[设计]`
+## 3. 策略的输出：离散动作 `[设计]`
 
-**已定（2026-10-11）：每次调用只输出一个离散动作，即 Show-Harness 的 meta action。** 本版用其中的 6 个平移和 2 个夹爪动作：
+**已定（2026-10-11）：每次调用只输出一个离散动作，即 Show-Harness 的 meta action。** 本版用其中的 6 个平移和 2 个夹爪动作。JEMM 给出 8 个动作的概率再抽样（1.1 节）；`--policy gpt` 时 GPT 输出这样的 JSON：
 
 ```json
 {"decision": "MV_FWD"}
@@ -249,16 +336,14 @@ N = 4，按每条轨迹都跑到超时的最坏情况算：
 
 ---
 
-## 4. 脚手架的执行规则 `[设计]`
+## 4. 脚手架的执行规则 `[设计]` `[代码]`
 
-- **解释器就是 Show-Harness 的 `AtomicExec`**，直接从 `Show-Harness/` 加载，参数用它的默认值（`gpt_rollout/interpreter.py`）：`[代码]`
-  - `MV_*`：每个控制步按"离目标还差多少"下指令（每步最多 2cm），走到离目标 1mm 以内为止，最多 16 个 env 步。目标对齐到以回合起点为原点的 2cm 网格，误差不累积（Show-Harness 的 LIBERO runner 也是这样做的）。
-  - `GRASP` / `RELEASE`：先保持不动，直到手臂每步位移小于 0.3mm（最多 40 步），再保持夹爪指令 10 步。
-- 每个 env.step 收到的仍是 8 个数的绝对位姿：当前位置加上这一步的位移、回合开始时的朝向、夹爪值。环境配置不变：Tabero 用 `Isaac-Libero-Tacumi-IK-Camera-ContactForce-v0`，RoboLab 用 `DroidIKActionCfg`。录进训练数据的动作就是这 8 个数，每帧一行；每帧属于哪个动作记在 `gpt_calls/calls.jsonl`（`first_frame`、`frame_count`）。
+- **解释器就是 Show-Harness 的 `AtomicExec`**，直接从 `Show-Harness/` 加载，参数用它的默认值（`gpt_rollout/interpreter.py`）。它怎么把一个离散动作变成每一帧的连续 action，见 4.1 节。`[代码]`
+- 环境配置不变：Tabero 用 `Isaac-Libero-Tacumi-IK-Camera-ContactForce-v0`，RoboLab 用 `DroidIKActionCfg`，两者都接收 8 个数的绝对位姿。逐帧数据里的动作就是这 8 个数，每帧一行；每帧属于哪个动作记在 `gpt_calls/calls.jsonl`（`first_frame`、`frame_count`）。离散动作另存为逐决策数据，见第 7 节。
 - 回合可能在一个动作的中途结束（成功或超时），这时立即停止。
 - GPT 思考期间**仿真暂停**等待，不占回合时间。
-- 每个回合最多 200 次决策（Show-Harness LIBERO runner 的默认值）。
-- **已定（2026-10-04，沿用）：** GPT 输出不合法时（JSON 解析不了、不是词表里的动作），用同一份观测重新调用；重新调用超过 3 次仍不合法，这次 rollout 记为失败。重新调用期间仿真不前进。
+- ~~每个回合最多 200 次决策（Show-Harness LIBERO runner 的默认值）。~~ 已去掉（2026-10-24，见 0.1 节），只在关掉超时的测量模式下保留。
+- **已定（2026-10-04，沿用）：** GPT 输出不合法时（JSON 解析不了、不是词表里的动作），用同一份观测重新调用；重新调用超过 3 次仍不合法，这次 rollout 记为失败。重新调用期间仿真不前进。只适用于 `--policy gpt`，JEMM 不会有不合法输出（1.1 节）。
 - JSON 对象前后多出来的字符会被忽略。实测网关有时会在回复最前面加一个 `_`（`_{"decision":"MV_FWD"}`），temperature 为 0 时同一份观测重新调用得到的结果完全相同，不忽略的话回合在第 0 步就会被记为失败。`[代码]` `gpt_rollout/actions.py`
 
 原仓库里与执行相关的事实：
@@ -269,7 +354,54 @@ N = 4，按每条轨迹都跑到超时的最坏情况算：
 | 单个回合的时长上限 | 每个任务自己定 `episode_length_s`，例如 BananaInBowl 是 50 秒，默认 600 秒 | **8 秒**（libero_10 是 16 秒），也就是 160（或 320）步，见同一文件 `:763` |
 | 原评测脚本自己的上限 | — | 关掉超时和物体掉落终止，改用 30 次推理 × 10 步 = 300 步（`benchmarks/openpi/openpi_inference_client.py:257-258`，`benchmarks/common/closedloop_policy_inference.py:62-72`） |
 
-### 4.1 实测：一个动作要多少步 `[代码]`
+### 4.1 解释器：一个离散动作怎么变成每一帧的连续 action `[代码]`
+
+**连续 action 不是事后算出来的，而是解释器每一步发给 `env.step` 的指令，发的同时原样录下来。** 仿真器听不懂 `MV_LEFT`，每个 env 步（Tabero 1/20 秒、RoboLab 1/15 秒）只接受 8 个数 `[x, y, z, qw, qx, qy, qz, 夹爪]`：手要去的位置、手的朝向、夹爪开合。手臂有惯性，一步走不到，所以一个离散动作要发好几步，每一步就是逐帧数据里的一帧。
+
+计算分两层：
+
+**第一层：我们的后端拼 8 个数**（`gpt_rollout/interpreter.py:65-73` 的 `apply_delta`）。`AtomicExec` 每一步给出一个想走的位移 `delta`：
+
+```text
+delta  = 把每个轴截到 ±2cm 以内
+action = [ 手的当前位置 + delta   (x, y, z)              ← 每步从仿真重新读：两块触觉垫之间的中心，机器人基座坐标系
+           回合开始时的朝向       (qw, qx, qy, qz)       ← 回合开始读一次，之后不变，所以手不转
+           夹爪值                 (1 个数) ]             ← 张开：Tabero 1 / RoboLab 0；闭合：Tabero 0 / RoboLab 1
+```
+
+**第二层：`AtomicExec` 决定每一步的 `delta`**（`Show-Harness/scripts/trajectory/real2sim/atomic_tokenizer.py`）：
+
+| 动作 | 过程 | 位置 |
+|---|---|---|
+| `MV_*` | 1. 定目标（只算一次）：把手的当前位置对齐到 2cm 网格上最近的格点（网格原点是回合开始时手的位置；偏离格点超过 5mm 就不对齐），再沿方向加 2cm。<br>2. 每一步 `delta = 目标 − 当前位置`；离目标小于 1mm 就停，最多 16 步。 | `:380`、`:368` |
+| `GRASP` | 1. 等停稳：每步发 `delta = 0`（待在原地），直到手一步移动不到 0.3mm，最多 40 步。<br>2. 夹爪状态改成闭合。<br>3. 再发 10 步 `delta = 0`，让手指合拢。 | `:424`、`:449` |
+| `RELEASE` | 同 `GRASP`，只是第 2 步改成张开。 | `:458` |
+
+- 夹爪状态存在 `AtomicExec` 里，之后每个 `MV_*` 的每一步都带着它，所以 `GRASP` 之后搬运时一直是闭合的，直到 `RELEASE`。夹爪只有开和合，不能半开、不能调力。
+- 先停稳再动夹爪是 Show-Harness 的规定：手在动时合手指会把物体拖偏；手在动时松手，剩余速度会传给物体（他们在 RoboLab 的魔方任务里实测过魔方被甩出 13.7cm）。等停稳的这几步也录成帧、计入步数。
+- 网格对齐让误差不累积：每个动作少走一点的话，下降十几格后手会停在物体上方抓不到（Show-Harness 的 LIBERO runner 也是这样做的）。
+
+**例子**（两倍时长试跑，Tabero `libero_object` task 0，第一个决策 `MV_LEFT`）：
+
+| 帧 | 发出去的 `action` | 执行后手的 y | 离目标 |
+|---|---|---|---|
+| 0 | `[0.4850, −0.0255, 0.2208, −0.0012, 0.9998, −0.0124, 0.0146, 1.0]` | −0.0090 | 1.65cm |
+| 1 | 同上 | −0.0155 | 1.00cm |
+| 2 | 同上 | −0.0209 | 0.46cm |
+| 3 | 同上 | −0.0242 | 0.12cm |
+| 4 | 同上 | −0.0258 | 0.03cm，小于 1mm，停 |
+
+手开始在 y = −0.0055，目标是 −0.0255。因为 `action` 的位置 = 当前位置 + (目标 − 当前位置) = 目标，只要差距不超过 2cm，每一帧发的都是目标点本身，所以一个 `MV_*` 内部的 `action` 是常数，手实际怎么走过去记录在 `observation.state` 里。同一回合的 `GRASP` 展开成 11 帧：1 帧等停稳（夹爪值 1），10 帧原地保持闭合（夹爪值 0）。
+
+**要训输出增量的连续策略时**，可以从数据里离线算，不用重新采：
+
+- 指令增量 = 本帧 `action` 的位置 − 上一帧手的位置。这就是第二层的 `delta`，部署时加到当前位置上就还原出绝对目标。第 0 帧的"上一帧位置"用逐决策数据 `actions.jsonl` 第 0 行的 `ee_pose`。
+- 实际位移 = 相邻两帧手的位置之差。它是结果，比指令小得多（上表第 0 帧：指令 −2.00cm，实际 −0.35cm），不适合当动作标签。
+- 夹爪不做差，用绝对的开或合；朝向不变，增量为 0。如果要在相对 IK 的环境里部署（RoboLab 的 `DroidRelIKActionCfg`、Tabero 的相对模式），动作还有缩放系数，跟踪特性也不同，不能直接套用。
+
+发出去之后的事不归解释器管：环境自己的 IK 把目标位姿换算成 7 个关节的目标角度，物理仿真驱动关节走一个控制周期。
+
+### 4.2 实测：一个动作要多少步 `[代码]`
 
 GPT 端点暂时连不上（2026-10-11），先用脚本代替 GPT（`gpt_rollout/scripted.py`：按真值坐标，每次选误差最大的那个轴走一步），把解释器在仿真里跑通。脚本策略很简单，这里的数字只说明解释器每个动作的代价，**不代表 GPT 需要的步数**。
 
@@ -284,18 +416,59 @@ GPT 端点暂时连不上（2026-10-11），先用脚本代替 GPT（`gpt_rollou
 
 - Tabero 那条：牛奶在搬运中两次滑脱；第三次抓起后，被夹着的牛奶碰到篮子边缘，按原版规则（水平距离 < 0.2m、高度差 < 0.2m、两者有接触，连续 8 步）判为成功，这时牛奶还在夹爪里。规则是任务自己的，不改。
 - 按空中每个动作 5–9 步算，一次不出错的抓取放置（约 55–70 个动作）就要几百步。Tabero 的 160 步肯定不够，RoboLab 的原值勉强够。
-- 一个动作要几步，主要由 `AtomicExec` 的"闭环走到 1mm 以内"决定。Show-Harness 在 RoboLab 上部署时用的是另一种解释器（`interpreters/robolab_atomic_controller.py`：每个动作固定 8 个 env 步、不闭环）。`[待对齐]` 用哪一种。
+- 一个动作要几步，主要由 `AtomicExec` 的"闭环走到 1mm 以内"决定。Show-Harness 在 RoboLab 上部署时用的是另一种解释器（`interpreters/robolab_atomic_controller.py`：每个动作固定 8 个 env 步、不闭环）。**已定（2026-10-24）：用 `AtomicExec`。** Show-Harness 在 RoboLab 上生成训练数据时用的也是它（`Show-Harness/scripts/trajectory/real2sim/robolab/oracle.py:210`），固定 8 步的那个只在部署时用；我们的目的是采训练数据。`[代码]`
 - 运行时间：两个 Isaac 进程同时跑，每个回合约 20 分钟（不含 GPT 思考）。逐帧录制每帧约 7MB，RoboLab 这一条就是 5.2G；测量时用 `--no-record` 只保留调用日志和结果。
 
 运行方法：
 
 ```bash
 scripts/isaac_python.sh -m gpt_rollout.tabero_run --task-suite libero_object --task-id 7 --num-seeds 1 \
-    --output-root outputs/measure --disable-time-out --no-record          # --policy scripted 不调 GPT
+    --output-root outputs/measure --disable-time-out --no-record          # 默认 --policy jemm；--policy scripted 不调模型
 scripts/isaac_python.sh -m gpt_rollout.robolab_run --task BananaInBowlTask --num-seeds 1 \
     --output-root outputs/measure --no-record                             # 脚本策略另加 --scripted-object banana --scripted-target bowl
 TacHarness/.venv-isaacsim51/bin/python scripts/progress.py outputs/measure     # 每种动作的步数统计
 ```
+
+### 4.3 实测：JEMM 冒烟测试（2026-10-24）`[代码]`
+
+两个 benchmark 各跑一个任务、一个种子，开启录制，两份数据都写出并读回校验。
+
+| | Tabero libero_object task 7（种子 0） | RoboLab BananaInBowlTask（种子 0） |
+|---|---|---|
+| 结果 | 失败，160 步超时 | 失败，749 步超时 |
+| 决策次数 | 18 | 81 |
+| 平均每个决策的 env 步数 | 8.9 | 9.2 |
+| JEMM 每次调用的平均耗时 | 1.56 秒 | 1.43 秒 |
+| 回合耗时（不含启动和发布） | 96 秒 | 548 秒 |
+| 发布逐帧数据 | 约 15 秒 | 约 2 分钟 |
+| GPU 0 峰值显存（JEMM 加一个 Isaac 进程） | 38.1GB | 39.4GB |
+| 数据大小 | LeRobot 0.7MB，Show-Harness 2.2MB | LeRobot 9.7MB，Show-Harness 13MB |
+
+- **JEMM 两条都没有完成任务。** 所有调用的置信度都低于阈值 0.987。RoboLab 那条平均置信度 0.31，手始终没有低于起始高度（z 从 0.321 到 0.422），动作在各个方向之间来回。
+- 一个 Isaac 进程占 7–9GB。GPU 0 上 JEMM 加一个 Isaac 已经到 39GB，放不下第二个 Isaac 进程。
+- 这两条是在原时间上限、有 200 次决策上限时跑的。之后按原设置开始的全量采集，`libero_object` task 0 的前 11 个回合也全部超时失败，手离要抓的罐头最近 0.14m，于是暂停并清空了输出。
+
+### 4.4 实测：两倍时长试跑（2026-10-24）`[代码]`
+
+时间上限放大两倍、不限决策次数（0.1 节），Tabero 每个套件的第一个任务加 RoboLab 两个任务，各 1 个种子，开启录制。输出在 `outputs/trial_x2/`（不进仓库），脚本是 `outputs/trial_x2/run.sh`。
+
+| 任务 | 步数 / 放大后上限（原上限） | 决策 | 手离要抓的物体：开始 → 最近 | 手最低 / 物体高度 | `GRASP` | 平均置信度 | 回合用时 |
+|---|---|---|---|---|---|---|---|
+| Tabero `libero_object` 0 | 320 / 320（160） | 37 | 0.29 → 0.21m | 0.12 / 0.04m | 1 | 0.44 | 191 秒 |
+| Tabero `libero_spatial` 0 | 320 / 320（160） | 39 | 0.35 → 0.19m（黑碗） | 0.14 / 0.00m | 6 | 0.37 | 196 秒 |
+| Tabero `libero_goal` 0（开抽屉） | 320 / 320（160） | 46 | — | 0.14m | 2 | 0.34 | 210 秒 |
+| Tabero `libero_10` 0 | 640 / 640（320） | 67 | 0.22 → 0.17m | 0.16 / 0.06m | 7 | 0.35 | 394 秒 |
+| Tabero `libero_tactile` 0（开抽屉） | 320 / 320（160） | 46 | — | 0.20m | 4 | 0.31 | 227 秒 |
+| RoboLab BananaInBowlTask | 1499 / 1500（750） | 141 | 0.35 → 0.33m | 0.32 / 0.02m | 17 | 0.31 | 1230 秒 |
+| RoboLab GrabABagelTask | 899 / 900（450） | 94 | 0.44 → 0.35m | 0.26 / 0.03m | 17 | 0.38 | 1149 秒 |
+
+- **7 个全部失败，都是超时。** 多出来的时间只是让 JEMM 多转了几圈：手离要抓的物体最近也还差 17cm，从没下降到物体的高度；RoboLab 上基本没往下走。
+- **抓取几乎全是空的。** 54 次 `GRASP` 里 52 次合到底（开口约 58mm）。只有 `libero_10` 有两次停在约 68mm，是夹在篮子边上，离要抓的罐头还有 18cm。
+- 置信度平均只有 0.31–0.44，远低于 JEMM 的阈值 0.987。
+- **结论：瓶颈是 JEMM，不是时间。** 继续采集之前，`[待对齐]` 选一个方向：
+  1. 离线诊断：用已经录下的观测换几种写法重新问 JEMM（只给文字、简化说明、只给坐标），看它能不能选对方向，判断问题在提示词还是模型；
+  2. 换策略：回到 GPT-6，或者换一个做过操作任务训练的模型；
+  3. 接受失败数据，照样采 Tabero（约 7 天，0.2 节）。
 
 - [ ] 核对：每个 env.step 都计入步数，包括 `GRASP` / `RELEASE` 前等手臂停稳的那几步。
 - [ ] 核对：GPT 输出不合法时重新调用，超过 3 次记为失败。
@@ -462,26 +635,167 @@ episode_length_s = 50
 
 ---
 
-## 7. 输出轨迹 `[设计]`
+## 7. 输出轨迹 `[设计]` `[代码]`
 
-每个开局跑完得到一条轨迹，包含：
+**已定（2026-10-24）：每次 rollout 产出两份训练数据，两份都要。** 成功和失败的回合都记录（见 0.2 节）。
 
-- 逐帧的画面（场景相机、腕部相机）和触觉；
-- 逐帧的机器人状态和动作；
-- GPT 每一次调用的完整输入和原始输出，并标注每一帧属于第几次调用；
-- 成败标记、耗时和调用花费。**只记录成功的轨迹**（已定，见 0.2 节）；
-- 最后统一整理成 **LeRobot v3** 格式；
-- 物体精确坐标**不进训练数据**。
+| | 逐帧数据 | 逐决策数据 |
+|---|---|---|
+| 一条样本 | 一次 `env.step`（RoboLab 1/15 秒，Tabero 1/20 秒） | 一次调用，也就是一个离散动作，对应若干个 env 步 |
+| 动作 | 解释器交给 `env.step` 的 8 个数 | 第 3 节 8 个离散动作中的一个 |
+| 观测 | 这一步执行之后的画面、触觉和机器人状态（见 7.1 节的帧约定） | 这次调用时的输入：第 2 节第 1–5 项，加最近 5 个移动动作；**不含**第 6 项物体坐标 |
+| 格式 | LeRobot v3，字段沿用 TacHarness 的 rollout 数据集 | Show-Harness 格式，见 7.2 节 |
+| 用来训 | 输出连续动作的策略 | 输出离散动作的模型 |
 
-现有的相关转换工具 `[代码]`：
+- 两份数据靠决策编号对应。第 j 次决策执行时产生的帧是 `[first_frame, first_frame + frame_count)`，记在 `gpt_calls/calls.jsonl` 里（`gpt_rollout/episode.py:178`），也写进逐决策数据的 `actions.jsonl`。逐帧数据每帧再加一列 `decision_index`，记它属于第几次决策（`scripts/publish_rollout.py`）。`[代码]`
+- 两份数据都不含物体真值坐标。
+- 现有的相关转换工具 `[代码]`：RoboLab 有 `robolab/core/export/lerobot_exporter.py`（episode 级字段 `success`）；Tabero 有 `benchmarks/common/`（HDF5 和视频转 LeRobot/OpenPI 格式）；TacHarness 有 `src/tacharness/data_engine/`（LeRobot v3 目录和回放）和 `tools/lerobot_v3_rollouts.py`。
 
-- RoboLab：`robolab/core/export/lerobot_exporter.py`（episode 级字段 `success`）；
-- Tabero：`benchmarks/common/`，HDF5 和视频转 LeRobot/OpenPI 格式；
-- TacHarness：`src/tacharness/data_engine/`（LeRobot v3 目录和回放）、`tools/lerobot_v3_rollouts.py`。
+### 7.1 逐帧数据
 
-- **已定（2026-10-04）：** 用 TacHarness 现有的保存链路输出 LeRobot v3：先由 `TacHarness/src/tacumi/recorder.py` 写出每条轨迹的逐帧 NPZ 暂存目录，再由 `TacHarness/tools/lerobot_v3_rollouts.py` 发布成 LeRobot v3 数据集（`outputs/datasets/lerobot_v3/tacumi_rollouts/` 下每个来源一个）。不另外输出 LIBERO 的 HDF5 形式。
-- 训练数据里每帧存的"动作"是解释器交给 `env.step` 的那 8 个数；每帧属于 GPT 的哪个离散动作，记在 `gpt_calls/calls.jsonl`。`[待对齐]` 训练数据里的动作用这 8 个数，还是用离散动作（Show-Harness 的格式是每个动作一帧），取决于要蒸馏给什么模型。
-- [ ] 核对：训练数据的字段里确实没有物体真值坐标。
+- **录制**沿用 TacHarness 的录制器（已定，2026-10-04）：`TacHarness/src/tacumi/recorder.py` 每帧写一个压缩 NPZ（`:480-481`），其中包括每块垫的原始触觉数组。不另外输出 LIBERO 的 HDF5 形式。`[代码]`
+- **帧约定**：第 k 帧存的是第 k 个动作，以及执行它之后的观测。RoboLab 见 `gpt_rollout/robolab_run.py:139`、`:148`；Tabero 见 `TacHarness/src/tacumi/tabero_rollout.py:382` 的 `record_step`。`[代码]`
+- **TacHarness 现有的发布工具接不上我们的 rollout**（`TacHarness/tools/lerobot_v3_rollouts.py`）`[代码]`：
+  - 只发布 `success` 和 `qualified` 都为真的回合（`:1361`）；
+  - 要靠回放流程写出的审核文件（`frontend_ready.json` 等）才能找到回合（`discover_tabero` `:1150`、`discover_robolab` `:1210`），我们的 rollout 没有这些文件；
+  - RoboLab 的 `action` 字段名写死为 `joint_target_1..7` 加 `gripper_command`（`:1851-1855`），而我们的动作是位姿。
+- **所以用自己的发布步骤** `[代码]`：`scripts/publish_rollout.py`，在 LeRobot 环境里运行（`scripts/lerobot_python.sh`），追加回合的部分直接调用 TacHarness 的 `_append_preencoded_episode`，视频用 PyAV 编成 H.264/yuv420p。要求：
+  - 输出标准的 LeRobot v3 目录，字段名和视频编码沿用 TacHarness 的 rollout 数据集（见下表），`action` 的字段名用 `gpt_rollout/actions.py` 的 `ACTION_LAYOUT`；
+  - 每帧加一列 `decision_index`；
+  - 失败的回合也发布，`success` 为假，`reward` 全为 0；
+  - 和 TacHarness 的回放数据集（`outputs/datasets/lerobot_v3/tacumi_rollouts/`）分开存放，因为两边 `action` 的含义不同。
+- **每帧的字段**，以 RoboLab 为例，沿用 `tools/lerobot_v3_rollouts.py` 的 `_dataset_features`（`:1845` 起）：
+
+| 字段 | 形状 | 内容 |
+|---|---|---|
+| `observation.state` | float32[15] | 7 个关节角、夹爪闭合比例、手的位置 xyz、朝向四元数（和 `gpt_rollout/robolab_run.py` 的 `STATE_LAYOUT` 一致） |
+| `action` | float32[8] | x, y, z, qw, qx, qy, qz, 夹爪值 |
+| `observation.tactile.summary` | float32[12] | 左右两块垫各 6 个数：是否接触、接触面积比例、深度有效比例、最大压深、平均压深、平均剪切 |
+| `observation.images.rgb_dual_view` | 视频 | 场景相机和腕部相机左右拼接，H.264 |
+| `observation.images.tacumi_tactile_composite` | 视频 | 触觉拼图，H.264 |
+| `reward` / `success` | float32[1] / bool[1] | 成功回合的最后一帧 `reward` 为 1，其余为 0；`success` 是整个回合的成败 |
+| `seed`、`rollout_id_hash`、`qualified` | 各 1 个数 | 种子、回合 ID 的哈希、是否通过审核（本方案没有单独的审核，`qualified` 与 `success` 相同） |
+| `decision_index` | int64[1] | 本方案新增，见上 |
+| LeRobot 自带 | 各 1 个数 | `timestamp`、`frame_index`、`episode_index`、`index`、`task_index` |
+
+  Tabero 的 `observation.state` 是录制钩子给的 8 维：位置、轴角朝向、左右手指开度（`TacHarness/src/tacumi/tabero_rollout.py:324-333`）。`[代码]`
+- **不进数据集的内容**：每块垫的原始触觉数组（只留摘要和拼图视频）、单独的场景图和腕部图（只留拼接后的视频）、物体坐标。
+- **存储** `[代码]`：暂存 NPZ 每帧约 7MB（第 4.2 节实测）。失败的回合会一直跑到超时，如果全部保留暂存要几十 TB，而 `/data` 只剩约 2.5TB。所以每个回合结束后立即发布、校验，然后删掉它的暂存目录。TacHarness 的 Tabero 批量回放也是这样做的（`TacHarness/docs/lerobot_v3_rollouts.md` 的 "Direct rollout retention"）。
+- **实现** `[代码]`：回合结束后，runner 调 `gpt_rollout/datasets.py` 的 `export_episode`，先写逐决策数据，再调 `publish_rollout.py`。发布脚本把回合追加进数据集，用 LeRobot 的读取器读回并解码首尾帧，再删掉暂存的 `frames/`。所有步骤都成功后，才往 `results.jsonl` 写这一回合，所以中途出错时断点续跑会重跑这个回合。已发布的回合记在数据集的 `meta/published_rollouts.jsonl`，按回合 ID 去重。多个 Isaac 进程同时发布时，用文件锁串行。
+- **输出目录**（`--output-root` 下）：
+
+```text
+<benchmark>/.../episode_<种子>/       # 暂存：发布后只剩 gpt_calls/calls.jsonl（含物体坐标的完整调用日志）、summary.json、meta/
+<benchmark>/.../results.jsonl         # 每回合一行结果，断点续跑用
+lerobot_v3/<benchmark>/               # 逐帧数据，每个 benchmark 一个 LeRobot v3 数据集
+showharness/<benchmark>/<任务>/rollout_<种子>/   # 逐决策数据（7.2 节）
+```
+
+### 7.2 逐决策数据
+
+- **一条样本是"决策时的观测 + 选中的离散动作"**。Show-Harness 存离散数据也是这样，它的 `RolloutWriter` 存的是动作执行之前的观测（`Show-Harness/scripts/trajectory/real2sim/atomic_tokenizer.py:552`）。`[代码]`
+- **标签在决策时直接记录，不从逐帧数据反推。** Show-Harness 实测，事后给连续轨迹打单轴标签时，65–72% 的位移不在单个轴上，不能用（同一文件 `:11-18`）。`[代码]`
+- **来源是调用日志**：`gpt_calls/calls.jsonl`，加上每次调用存下的三张图 `call_XXXX_{scene,wrist,tactile}.png`（JEMM 见 `gpt_rollout/jemm.py:138`，GPT 见 `gpt_rollout/episode.py:81`）。`[代码]`
+- **决策时的观测必须单独存**，因为逐帧数据里没有它：按 7.1 节的帧约定，第 j 次决策时的观测在第 `first_frame − 1` 帧，而第 0 次决策时的初始观测不在任何一帧里。
+- **去掉物体坐标** `[代码]`：`calls.jsonl` 每次调用除了拼好的整段输入文字（`input_text`，含物体坐标），还分项存了一份 `observation`：指令、手的位置和朝向、夹爪状态和开口宽度、物体坐标、最近动作（`gpt_rollout/episode.py:149-158`）。导出逐决策数据时只取其中的机器人状态，不带物体坐标和整段文字。
+- 调用日志里的相机图是缩到 224×224 的版本。需要更高分辨率时，从逐帧数据里取第 `first_frame − 1` 帧（第 0 次决策没有对应帧）。
+
+**已定（2026-10-24）：逐决策数据采用 Show-Harness 格式**，也就是它的 `RolloutWriter` 写出的目录结构（`Show-Harness/scripts/trajectory/real2sim/atomic_tokenizer.py:552-630`）。`[代码]` 这样可以直接用 `Show-Harness/train/data_preparation/rollouts_to_alpaca.py` 转成训练数据。写出的代码是 `gpt_rollout/datasets.py` 的 `export_showharness`，它把调用日志里的三张图移过去，`calls.jsonl` 留在原处。`[代码]`
+
+一个回合一个目录，同一任务的回合放在同一个父目录下（转换脚本按父目录展开其中带 `actions.jsonl` 的子目录，`rollouts_to_alpaca.py:326-329`）`[代码]`：
+
+```text
+<benchmark>/<任务>/rollout_<种子>/
+├── agentview/NNNN.png     # 第 NNNN 次决策时的场景相机图（就是发给模型的那张）
+├── wrist/NNNN.png         # 同一时刻的腕部相机图
+├── tactile/NNNN.png       # 同一时刻的触觉拼图（本方案新增，Show-Harness 没有触觉）
+├── actions.jsonl          # 每次决策一行
+└── metadata.json          # 回合信息
+```
+
+`actions.jsonl` 每行的字段 `[代码]`：
+
+| 字段 | 来源 | 内容 |
+|---|---|---|
+| `step` | Show-Harness | 决策编号，等于逐帧数据里的 `decision_index` |
+| `token` | Show-Harness | 选中的离散动作 |
+| `kind` | Show-Harness | `move`、`grasp` 或 `release`（`atomic_tokenizer.py:143` 的 `token_kind`） |
+| `gripper_closed` | Show-Harness | 决策前夹爪是否闭合 |
+| `ee_pose` | Show-Harness | 决策前的 `[x, y, z, qw, qx, qy, qz]`，即第 2 节第 5 项的手的位置和朝向（机器人基座坐标系） |
+| `gripper_width` | Show-Harness | 决策前两块垫之间的开口宽度，单位米。由两个手指关节角的平均值，在 0° 时 79.7mm、20° 时 58mm 之间线性插值得到，是估计值（`gpt_rollout/sim.py` 的 `gripper_width_m`） |
+| `agentview`、`wrist` | Show-Harness | 两张相机图的相对路径 |
+| `time` | Show-Harness | 写这一行时的时间戳 |
+| `tactile` | 本方案新增 | 触觉拼图的相对路径 |
+| `policy_output` | 本方案新增 | 策略这次调用的原始输出 |
+| `first_frame`、`frame_count` | 本方案新增 | 这次决策在逐帧数据里对应的帧 |
+| `travelled_m` | 本方案新增 | `MV_*` 的实际位移，其他动作为空 |
+
+- 新增的字段不影响转换脚本：它只读 `token`、`agentview`、`wrist`、`gripper_closed`（`rollouts_to_alpaca.py:380-431`）。`[代码]` 触觉图因此不会自动进入训练样本，要用的话需要扩展转换脚本。
+- **不含物体坐标**：`actions.jsonl` 里没有物体坐标这一项，也不保存拼好的输入文字。
+- `metadata.json`：沿用 Show-Harness 的 `task`、`task_text`、`seed`、`env_id`、`step_m`（参照 `Show-Harness/scripts/trajectory/real2sim/robolab/oracle.py:420` 起），另加 `success`、`end_reason`，以及 `results.jsonl` 里这个回合的整行结果。写入器关闭时会自动补上 `num_steps` 和 `token_counts`。`[代码]`
+- 最近动作不用另存：转换脚本按"最近 5 个 `MV_*`，最新的在前"从前面的 `token` 重新算（`rollouts_to_alpaca.py:110`），和第 1 节提示词里的规则一致。`[代码]`
+- **注意：转换脚本会给每个回合的最后一帧合成一条 `DONE` 样本，不管回合成功与否**（`rollouts_to_alpaca.py:116-118`、`:467-474`）。`[代码]` 本方案的动作里没有 `DONE`（第 3 节），而且失败的回合也会被记录。所以转换时要按 `metadata.json` 的 `success` 排除失败的回合，或者去掉合成的 `DONE` 样本。
+
+- [ ] 核对：两份数据的字段里都没有物体真值坐标。
+- [ ] 核对：每帧的 `decision_index` 和 `calls.jsonl` 里的 `first_frame`、`frame_count` 一致。
+- [ ] 核对：失败的回合在两份数据里都有，`success` 为假。
+- [ ] 核对：逐决策数据能被 `rollouts_to_alpaca.py` 正常读取；转换时失败回合或合成的 `DONE` 已按上面的规则处理。
+
+### 7.3 怎么看输出 `[代码]`
+
+一个输出目录（`--output-root`，例如 `outputs/trial_x2/`）里：
+
+| 目录 | 是什么 | 用途 |
+|---|---|---|
+| `showharness/<benchmark>/<任务>/rollout_<种子>/` | **离散**：每次决策一条（7.2 节） | 训输出离散动作的模型 |
+| `lerobot_v3/<benchmark>/` | **连续**：每个 env 步一帧，每个 benchmark 一个数据集，视频也在这里（7.1 节） | 训输出连续动作的策略 |
+| `<benchmark>/…/results.jsonl` | 每个回合一行结果 | 统计成功率、断点续跑 |
+| `<benchmark>/…/episode_<种子>/gpt_calls/calls.jsonl` | 每次调用的完整输入输出，**含物体真值坐标** | 调试，不能当训练数据 |
+
+**两份数据怎么对应**：`actions.jsonl` 第 j 行的 `first_frame`、`frame_count` 是它在逐帧数据里的帧范围；逐帧数据每帧的 `decision_index` 等于 `actions.jsonl` 的 `step`。注意观测时刻不同：离散数据存动作执行**之前**的画面，连续数据第 k 帧存第 k 个动作和执行**之后**的画面，所以第 j 次决策看到的画面在连续数据的第 `first_frame − 1` 帧。
+
+**读离散数据**（普通 Python）：
+
+```python
+import json
+rows = [json.loads(l) for l in open("outputs/trial_x2/showharness/tabero/libero_object/task_000/rollout_000/actions.jsonl")]
+print([r["token"] for r in rows])                     # 整个回合的动作序列；图片在同目录的 agentview/ wrist/ tactile/
+```
+
+**读连续数据**（在 LeRobot 环境里，图像从 mp4 按时间戳解码）：
+
+```bash
+scripts/lerobot_python.sh - <<'PY'
+from lerobot.datasets.lerobot_dataset import LeRobotDataset
+ds = LeRobotDataset("local/gpt-rollouts-tabero", root="outputs/trial_x2/lerobot_v3/tabero", episodes=[0], video_backend="pyav")
+frame = ds[100]
+print(frame["action"], frame["decision_index"], frame["observation.images.rgb_dual_view"].shape)
+PY
+```
+
+只要数值的话，直接用 pandas 读 `lerobot_v3/<benchmark>/data/chunk-000/file-*.parquet`。哪个回合在哪个文件、视频的起止时间，记在 `meta/episodes/*.parquet`；回合 ID 和 `episode_index` 的对应在 `meta/published_rollouts.jsonl`。现在每个回合由单独一次发布追加，所以每个回合各占一个 parquet 和一个 mp4（`file-000`、`file-001` …）。
+
+**视频**：每个回合两路，都在 `lerobot_v3/<benchmark>/videos/` 下，H.264，帧率等于控制频率（Tabero 20fps、RoboLab 15fps）：
+
+- `observation.images.rgb_dual_view/`：场景相机和腕部鱼眼相机左右拼接（Tabero 1422×512，RoboLab 2560×720）；
+- `observation.images.tacumi_tactile_composite/`：触觉拼图（1542×626）。整段没碰到东西时几乎全黑，文件很小。
+
+离散数据里没有视频，只有每次决策那一刻的三张 PNG。
+
+**结果浏览网页**：
+
+```bash
+scripts/site/build_site.sh outputs/trial_x2 outputs/trial_x2/site "TacClaw 两倍时长试跑"
+```
+
+在 `<site_dir>` 下生成 `index.html`、`data.json` 和 `media/`，静态网页，可以直接发布或用任意静态服务器打开。内容按 benchmark 分开，每个回合有：
+
+- 同步播放的两路视频（缩小到一半的网页版）；
+- 离散结果：决策时间线和每次决策的 8 个概率，点一下跳到视频对应位置；
+- 连续结果：逐帧目标位置曲线、夹爪和触觉接触状态、手的俯视轨迹、手到要抓的物体的距离；
+- 同一个动作在两份数据里的原始记录。
+
+另有"输入格式"一节，展示第一个回合第 0 次决策时 JEMM 收到的完整文字和三张图（用 JEMM 自己的 `mm_messages` 重建）以及返回的概率，和"数据格式"一节。脚本在 `scripts/site/`：`build_prompts.py` 在 `.venv-jemm` 里重建提示词，`build_site_data.py` 在 LeRobot 环境里读两份数据并剪视频（需要 `ffmpeg`），`index.html` 是页面模板。
 
 ---
 
@@ -493,10 +807,15 @@ episode_length_s = 50
 - [ ] Isaac Sim / IsaacLab 版本已记录
 - [ ] 腕部相机标定用 260808 v5（默认值），已记录进元数据
 
+**策略（1.1 节）**
+- [ ] 每个回合的结果里记录了 JEMM 的模型和精度（`policy_model`）
+- [ ] 动作按 JEMM 的概率采样，随机数生成器用回合的种子初始化
+- [ ] int8 相对 bf16 的概率偏移已测，或者确认不测
+
 **采集范围（0.2 节）**
 - [ ] Tabero 46 个任务、RoboLab 120 个任务，每个任务 50 个种子各一条
 - [ ] Tabero 的开局是环境默认重置的随机采样，没有用示范轨迹
-- [ ] Tabero 步数上限 160（`libero_10` 为 320），超时和掉落终止条件开启
+- [ ] 时间上限是原值的两倍（Tabero 320 步，`libero_10` 640 步；RoboLab 各任务两倍），没有决策次数上限，超时和掉落终止条件开启
 - [ ] RoboLab 开局相同的处理方式已定
 - [ ] RoboLab 的采集规模已确认
 - [ ] 每条轨迹记录了随机种子
@@ -504,7 +823,7 @@ episode_length_s = 50
 **输入与输出**
 - [ ] 输入正好是第 2 节的 6 项，没有多也没有少
 - [ ] 触觉输出完全沿用 TacHarness 现有代码，没有改动（见 2.1 节）
-- [ ] 输出只有 `{"decision": 动作}`，动作在第 3 节的 8 个之内
+- [ ] 策略的输出是第 3 节 8 个动作之一（JEMM 给出概率后抽样；`--policy gpt` 时输出 `{"decision": 动作}`）
 - [ ] 提示词里已解释第 2 节列出的全部内容
 - [ ] 动作的方向用机器人基座坐标系，移动的点是 `tacumi-contact-center-v1`，实现与此一致
 
@@ -515,7 +834,9 @@ episode_length_s = 50
 - [ ] TacClaw 闭合角是默认的 20°，`num_success_steps` 是默认的 8
 
 **执行**
-- [ ] GPT 输出不合法时重新调用，超过 3 次记为失败
+- [ ] 解释器是 Show-Harness 的 `AtomicExec`，用它的默认参数，每一帧的 8 个数按 4.1 节计算
+- [ ] `GRASP` / `RELEASE` 先等手臂停稳，再把夹爪指令保持 10 步
+- [ ] GPT 输出不合法时重新调用，超过 3 次记为失败（只适用于 `--policy gpt`）
 
 **判定**
 - [ ] 每个选用任务的官方 success 判定已列出
@@ -523,6 +844,9 @@ episode_length_s = 50
 - [ ] Tabero 用的是 TacHarness 副本和默认环境 `Isaac-Libero-Tacumi-IK-Camera-ContactForce-v0`
 
 **数据**
-- [ ] LeRobot v3 的转换链路已定
-- [ ] 训练字段不含特权信息，只记录成功的轨迹
-- [ ] 每条轨迹的元数据记录了：GPT 模型版本、调用次数、花费、仿真版本、标定版本、环境 ID
+- [ ] 每次 rollout 都产出逐帧和逐决策两份数据（第 7 节）
+- [ ] 逐帧数据用自己的发布步骤写成 LeRobot v3，每个回合发布、校验后删掉暂存
+- [ ] 逐决策数据按 Show-Harness 格式写出（7.2 节），每个回合的图片、`actions.jsonl`、`metadata.json` 齐全
+- [ ] 两份数据都不含特权信息；成功和失败的回合都记录，用 `success` 区分
+- [ ] 每条轨迹的元数据记录了：策略模型和精度、调用次数、耗时、仿真版本、标定版本、环境 ID、时间上限倍数
+- [ ] `scripts/site/build_site.sh` 能把输出目录做成结果浏览网页（7.3 节）

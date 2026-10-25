@@ -57,4 +57,16 @@ snapshot_download(
 )
 PY
 
+# 5. libGLU, which the MDL SDK needs to compile RTX materials, when the host lacks
+#    libglu1-mesa: unpack the distribution's own package (no root needed) into .local/lib,
+#    which scripts/isaac_python.sh puts on LD_LIBRARY_PATH.
+if ! ldconfig -p | grep -q 'libGLU\.so\.1 '; then
+  deb_dir="$(mktemp -d)"
+  (cd "${deb_dir}" && apt-get download libglu1-mesa)
+  dpkg-deb -x "${deb_dir}"/libglu1-mesa_*.deb "${deb_dir}/root"
+  mkdir -p "${rollout_root}/.local/lib"
+  cp -a "${deb_dir}"/root/usr/lib/x86_64-linux-gnu/libGLU.so.1* "${rollout_root}/.local/lib/"
+  rm -rf "${deb_dir}"
+fi
+
 echo "runtime ready: ${python}"

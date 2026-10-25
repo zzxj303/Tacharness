@@ -39,7 +39,8 @@ _SCENE_CAMERA = {
 }
 _STEP_SECONDS = {"robolab": "1/15", "tabero": "1/20"}
 
-_SYSTEM_TEMPLATE = """You control a Franka robot arm with a TacClaw two-finger gripper by choosing discrete actions. \
+# README section 2's explanations, shared by every policy that reads the observation as text.
+_EXPLANATION_TEMPLATE = """You control a Franka robot arm with a TacClaw two-finger gripper by choosing discrete actions. \
 Each time you are called you see the current observation and your recent moves, and you choose ONE action. \
 The robot executes it completely, then you are called again with a new observation.
 
@@ -80,20 +81,45 @@ failed: RELEASE and try again.
 - To place a held object: lift it clear, move above the destination, lower it until it is just above the \
 destination, then RELEASE and move up.
 - Avoid choosing the opposite of your most recent move unless you overshot.
+"""
 
+_GPT_OUTPUT_TEMPLATE = """
 OUTPUT
 Return only this JSON object and no other text:
 {{"decision": "ONE_ACTION"}}
 where ONE_ACTION is one of {tokens}.
 """
 
+# README section 3, one line per action; JEMM sees these as its candidates.
+ACTION_DESCRIPTIONS = {
+    "MV_FWD": "MV_FWD: move the gripper 2 cm along +x.",
+    "MV_BACK": "MV_BACK: move the gripper 2 cm along -x.",
+    "MV_LEFT": "MV_LEFT: move the gripper 2 cm along -y.",
+    "MV_RIGHT": "MV_RIGHT: move the gripper 2 cm along +y.",
+    "MV_UP": "MV_UP: move the gripper 2 cm along +z.",
+    "MV_DOWN": "MV_DOWN: move the gripper 2 cm along -z.",
+    "GRASP": "GRASP: stop the arm, then close the gripper.",
+    "RELEASE": "RELEASE: stop the arm, then open the gripper.",
+}
+assert set(ACTION_DESCRIPTIONS) == set(TOKENS)
 
-def system_prompt(benchmark: str) -> str:
-    return _SYSTEM_TEMPLATE.format(
+JEMM_QUESTION = "Which ONE action should the robot take next to carry out the task instruction?"
+
+
+def explanation(benchmark: str) -> str:
+    return _EXPLANATION_TEMPLATE.format(
         scene_camera=_SCENE_CAMERA[benchmark],
         step_seconds=_STEP_SECONDS[benchmark],
-        tokens=", ".join(TOKENS),
     )
+
+
+def system_prompt(benchmark: str) -> str:
+    return explanation(benchmark) + _GPT_OUTPUT_TEMPLATE.format(tokens=", ".join(TOKENS))
+
+
+def jemm_state(benchmark: str, observation: "Observation", recent_moves: list[str]) -> str:
+    """JEMM's fixed system prompt cannot carry our explanations, so they lead its State block."""
+    return explanation(benchmark).rstrip() + "\n\nCURRENT OBSERVATION\n" + observation_text(observation, recent_moves)
 
 
 def observation_text(observation: Observation, recent_moves: list[str]) -> str:
