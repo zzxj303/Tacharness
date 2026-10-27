@@ -1,4 +1,5 @@
 <title>TacClaw Rollout 浏览</title>
+<meta charset="utf-8">
 <meta name="claude:viewport-fit-sides" content="cover">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -52,6 +53,7 @@
 }
 
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 body {
   background: var(--page);
   color: var(--ink);
@@ -82,6 +84,8 @@ code { font-size: 0.9em; background: var(--sunken); padding: 0.05em 0.35em; bord
 .fact { display: grid; gap: 0; }
 .fact b { font-family: var(--font-display); font-size: var(--step-2); font-weight: 600; }
 .fact.fail b { color: var(--fail); }
+.run-tabs { justify-self: start; flex-wrap: wrap; }
+.run-tabs button small { color: var(--muted); font-size: var(--step--1); margin-left: 6px; }
 
 /* Benchmark switch */
 .bench-bar {
@@ -101,7 +105,7 @@ code { font-size: 0.9em; background: var(--sunken); padding: 0.05em 0.35em; bord
 .jump a:hover { text-decoration: underline; }
 
 /* Workspace */
-.workspace { display: grid; grid-template-columns: minmax(250px, 300px) minmax(0, 1fr); gap: 24px; align-items: start; }
+.workspace { display: grid; grid-template-columns: minmax(250px, 300px) minmax(0, 1fr); gap: 24px; align-items: start; scroll-margin-top: 72px; }
 .rail { display: grid; gap: 6px; position: sticky; top: calc(env(safe-area-inset-top, 0px) + 64px); }
 .ep {
   text-align: left; font: inherit; color: inherit; background: transparent; border: 1px solid transparent;
@@ -226,6 +230,22 @@ pre .priv { background: var(--fail-soft); color: var(--fail); }
 ul.notes { margin: 0; padding-left: 1.2em; display: grid; gap: 6px; color: var(--ink-2); max-width: 90ch; }
 .empty-note { color: var(--muted); font-size: var(--step--1); padding: 24px 0; }
 
+/* Lift chart: hand and object height before each decision */
+.k-hand { --kc: var(--ink-2); } .k-obj { --kc: var(--accent); }
+.s-hand { stroke: var(--ink-2); } .s-obj { stroke: var(--accent); stroke-dasharray: 5 3; }
+.mark { stroke: var(--surface); stroke-width: 1.5; }
+.mark.k-grasp { fill: var(--grasp); } .mark.k-release { fill: var(--release); }
+.nowline { stroke: var(--ink); stroke-width: 1.5; }
+
+/* Case analysis (an HTML fragment from scripts/site/cases/, placed in #case) */
+.case-block { display: grid; gap: 12px; min-width: 0; }
+.case-block > p, .case-block > ul { max-width: 90ch; }
+.case a[data-ep] { color: var(--accent); text-decoration: none; border-bottom: 1px solid var(--accent-soft); }
+.case a[data-ep]:hover { border-bottom-color: var(--accent); }
+.result-cell { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; }
+.result-cell .mono { color: var(--ink-2); font-size: var(--step--1); }
+.case .source { color: var(--muted); font-size: var(--step--1); max-width: 90ch; }
+
 @media (max-width: 980px) {
   .workspace { grid-template-columns: minmax(0, 1fr); }
   .rail { position: static; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); }
@@ -243,19 +263,22 @@ ul.notes { margin: 0; padding-left: 1.2em; display: grid; gap: 6px; color: var(-
 
 <div class="wrap">
   <header class="masthead">
-    <span class="label">JEMM × TacClaw · Show-Harness meta action · <span id="generated"></span></span>
+    <div class="tabs run-tabs" role="tablist" id="runs" aria-label="切换试跑" hidden></div>
+    <span class="label"><span id="policy-tag">JEMM × TacClaw</span> · Show-Harness meta action · <span id="generated"></span></span>
     <h1 id="page-title">TacClaw Rollout 浏览</h1>
-    <p class="lede">JEMM（Qwen3.8-27B LoRA，int8）每次看一份观测，从 8 个离散动作里按概率抽一个，Show-Harness 的 <code>AtomicExec</code> 把它展开成若干个仿真步执行。<span id="limits-note"></span>每个回合同时写出离散（Show-Harness）和连续（LeRobot v3）两份数据。</p>
+    <p class="lede"><span id="policy-lede">JEMM（Qwen3.8-27B LoRA，int8）每次看一份观测，从 8 个离散动作里按概率抽一个，Show-Harness 的 <code>AtomicExec</code> 把它展开成若干个仿真步执行。</span><span id="limits-note"></span>每个回合同时写出离散（Show-Harness）和连续（LeRobot v3）两份数据。</p>
     <div class="facts" id="facts"></div>
   </header>
+
+  <section class="section case" id="case" hidden></section>
 
   <nav class="bench-bar" aria-label="切换 benchmark">
     <div class="tabs" role="tablist" id="tabs"></div>
     <span class="note" id="bench-note"></span>
-    <div class="jump"><a href="#input">输入格式</a><a href="#format">数据格式</a></div>
+    <div class="jump"><a href="#case" id="jump-case" hidden>案例分析</a><a href="#input">输入格式</a><a href="#format">数据格式</a></div>
   </nav>
 
-  <div class="workspace">
+  <div class="workspace" id="workspace">
     <div class="rail" id="rail" aria-label="回合列表"></div>
     <div class="inspector" id="inspector"><p class="empty-note">正在读取试跑数据…</p></div>
   </div>
@@ -263,10 +286,10 @@ ul.notes { margin: 0; padding-left: 1.2em; display: grid; gap: 6px; color: var(-
   <section class="section" id="input">
     <header>
       <span class="label">输入格式</span>
-      <h2>JEMM 每次收到什么、返回什么</h2>
-      <p>下面是当前 benchmark 第一个回合<b>第 0 次决策</b>的真实输入，由 JEMM 自己的 <code>jemm.contract.mm_messages</code> 重建，和它实际收到的一字不差。</p>
+      <h2 id="input-title">JEMM 每次收到什么、返回什么</h2>
+      <p id="input-intro">下面是当前 benchmark 第一个回合<b>第 0 次决策</b>的真实输入，由 JEMM 自己的 <code>jemm.contract.mm_messages</code> 重建，和它实际收到的一字不差。</p>
     </header>
-    <ol class="flow">
+    <ol class="flow" id="flow">
       <li><b>读观测</b>场景相机、腕部相机、触觉拼图、手的位姿、物体坐标、最近 5 个移动动作</li>
       <li><b>拼成请求</b>说明文字和观测放进 State，8 个动作作为 Candidates，三张图放在文字前</li>
       <li><b>JEMM 打分</b>读 A–H 八个标签 token 的 logits，softmax 后得到 8 个概率</li>
@@ -276,23 +299,23 @@ ul.notes { margin: 0; padding-left: 1.2em; display: grid; gap: 6px; color: var(-
     <div class="msg">
       <div class="msg-part">
         <h3>system</h3>
-        <p class="label">JEMM 训练时固定，不能改</p>
+        <p class="label" id="sys-label">JEMM 训练时固定，不能改</p>
         <pre class="wrap-text" id="sys-prompt"></pre>
         <h3>请求体</h3>
-        <p class="label">rollout 端发给 <code>POST /v1/systemone</code> 的 JSON（图片和 State 省略）</p>
+        <p class="label" id="req-label">rollout 端发给 <code>POST /v1/systemone</code> 的 JSON（图片和 State 省略）</p>
         <pre id="req-body"></pre>
       </div>
       <div class="msg-part">
         <h3>user</h3>
-        <p class="label">先是三张图，再是一段文字</p>
+        <p class="label" id="user-label">先是三张图，再是一段文字</p>
         <div class="imgs" id="prompt-imgs"></div>
         <pre class="wrap-text" id="user-text"></pre>
-        <p class="callout">标红的是物体真值坐标。它只给 JEMM 看，两份训练数据里都没有。</p>
+        <p class="callout">标红的是物体真值坐标。它只给 <span class="policy-name">JEMM</span> 看，两份训练数据里都没有。</p>
       </div>
     </div>
     <div class="two">
       <div class="stack">
-        <h3>JEMM 返回的结果</h3>
+        <h3 id="out-title">JEMM 返回的结果</h3>
         <div class="fields"><table class="out-table" id="out-table"></table></div>
       </div>
       <div class="stack" id="out-notes"></div>
@@ -334,6 +357,20 @@ ul.notes { margin: 0; padding-left: 1.2em; display: grid; gap: 6px; color: var(-
   const KIND_LABEL = { x: "x 方向移动（FWD / BACK）", y: "y 方向移动（LEFT / RIGHT）", z: "z 方向移动（UP / DOWN）", grasp: "GRASP 闭合", release: "RELEASE 张开" };
   const END = { time_out: "超时", object_dropped: "物体掉落", success: "成功", max_decisions: "达到决策上限", invalid_output: "输出不合法" };
   const BENCH_LABEL = { tabero: "Tabero", robolab: "RoboLab" };
+  // What differs between the two policies the rollout can use (README section 1.1).
+  const POLICY = {
+    jemm: {
+      name: "JEMM", tag: "JEMM × TacClaw",
+      lede: "JEMM（Qwen3.8-27B LoRA，int8）每次看一份观测，从 8 个离散动作里按概率抽一个，Show-Harness 的 <code>AtomicExec</code> 把它展开成若干个仿真步执行。",
+      output: "JEMM 的 8 个概率、置信度、延迟",
+    },
+    gpt: {
+      name: "GPT-6", tag: "GPT-6 × TacClaw",
+      lede: "GPT-6 astra 每次看一份观测，回一段 JSON 选出 8 个离散动作中的一个，Show-Harness 的 <code>AtomicExec</code> 把它展开成若干个仿真步执行。",
+      output: "GPT-6 的原始输出、token 用量、延迟（重新调用时每次一项）",
+    },
+  };
+  let P = POLICY.jemm;
   const SVGNS = "http://www.w3.org/2000/svg";
   const $ = (s, r = document) => r.querySelector(s);
   const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
@@ -341,6 +378,11 @@ ul.notes { margin: 0; padding-left: 1.2em; display: grid; gap: 6px; color: var(-
   const tip = $("#tip");
 
   let data, bench = "tabero", epIdx = 0, ep = null, raf = 0, lastDecision = -1;
+  // Several output roots can share one page: runs.json lists them (README section 7.3).
+  let runs = [], run = null;
+  // The input section's markup is written for JEMM; GPT-6 rewrites it, so keep it to switch back.
+  const JEMM_INPUT = Object.fromEntries(["input-title", "input-intro", "flow", "sys-label", "req-label", "user-label", "out-title"]
+    .map((id) => [id, document.getElementById(id).innerHTML]));
 
   function el(tag, attrs = {}, parent) {
     const node = document.createElementNS(SVGNS, tag);
@@ -388,6 +430,9 @@ ul.notes { margin: 0; padding-left: 1.2em; display: grid; gap: 6px; color: var(-
     $("#limits-note").textContent = `每个任务的时间上限是原值的 ${scales.join(" / ")} 倍，决策次数上限：${capText}；每个任务 ${seeds.join(" / ")} 个种子。`;
     $("#page-title").textContent = data.title || "TacClaw Rollout 浏览";
     $("#generated").textContent = data.generated || "";
+    $("#policy-tag").textContent = P.tag;
+    $("#policy-lede").innerHTML = P.lede;
+    document.querySelectorAll(".policy-name").forEach((n) => { n.textContent = P.name; });
     document.querySelectorAll(".output-root").forEach((n) => { n.textContent = `${data.output_root}/`; });
   }
   function renderTabs() {
@@ -414,7 +459,7 @@ ul.notes { margin: 0; padding-left: 1.2em; display: grid; gap: 6px; color: var(-
   function selectBench(b, i, push) {
     bench = b; epIdx = i; ep = data.benchmarks[b].episodes[i];
     renderTabs(); renderRail(); renderInspector(); renderInput();
-    if (push) { try { history.replaceState(null, "", `#${b}-${i}`); } catch (_) {} }
+    if (push) { try { history.replaceState(null, "", "#" + [run && run.id, b, i].filter((x) => x || x === 0).join("-")); } catch (_) {} }
   }
 
   // ---------- inspector ----------
@@ -431,7 +476,7 @@ ul.notes { margin: 0; padding-left: 1.2em; display: grid; gap: 6px; color: var(-
           <span>步数 <b class="tnum">${e.steps}</b> / 上限 <b class="tnum">${e.episode_step_limit}</b>（原 ${e.max_episode_steps}）</span>
           <span>决策 <b class="tnum">${e.decisions_count}</b></span>
           <span>仿真时长 <b class="tnum">${(e.steps / e.fps).toFixed(1)} s</b></span>
-          <span>真实用时 <b class="tnum">${minutes(e.wall_seconds)} min</b>（JEMM ${minutes(e.policy_seconds)} min）</span>
+          <span>真实用时 <b class="tnum">${minutes(e.wall_seconds)} min</b>（${P.name} ${minutes(e.policy_seconds)} min）</span>
         </div>
       </div>
 
@@ -459,7 +504,7 @@ ul.notes { margin: 0; padding-left: 1.2em; display: grid; gap: 6px; color: var(-
         </div>
         <div class="charts-2">
           <div class="chart-box">
-            <span class="label">手的俯视轨迹（每次决策前的位置）· 物体坐标只给 JEMM 看</span>
+            <span class="label">手的俯视轨迹（每次决策前的位置）· 物体坐标只给 ${P.name} 看</span>
             <div id="topdown"></div>
           </div>
           <div class="chart-box">
@@ -467,6 +512,11 @@ ul.notes { margin: 0; padding-left: 1.2em; display: grid; gap: 6px; color: var(-
             <div id="dist"></div>
           </div>
         </div>
+        ${e.target_z ? `<div class="chart-box">
+          <span class="label">抓取高度：每次决策前手和 ${esc(e.target)} 的高度 z（米）· 悬停看夹爪开口，点击跳转</span>
+          ${liftLegend(e)}
+          <div id="lift"></div>
+        </div>` : ""}
       </div>
 
       <div class="panel">
@@ -506,6 +556,7 @@ ul.notes { margin: 0; padding-left: 1.2em; display: grid; gap: 6px; color: var(-
     document.querySelectorAll(".playhead").forEach((ph) => { const x = ph.dataset.x0 * 1 + (ph.dataset.w * 1) * (f + 0.5) / ep.frames.x.length; ph.setAttribute("x1", x); ph.setAttribute("x2", x); });
     const now = $("#td-now"); if (now) { const p = topdownXY(dec.ee); now.setAttribute("cx", p[0]); now.setAttribute("cy", p[1]); }
     const dnow = $("#dist-now"); if (dnow && ep.distances) { dnow.setAttribute("cx", distX(d)); dnow.setAttribute("cy", distY(ep.distances[d])); }
+    const lnow = $("#lift-now"); if (lnow) { const x = liftX(d); lnow.setAttribute("x1", x); lnow.setAttribute("x2", x); }
     if (d !== lastDecision) {
       document.querySelectorAll("#dec-table tr.now").forEach((r) => r.classList.remove("now"));
       const row = document.querySelector(`#dec-table tr[data-d="${d}"]`);
@@ -519,6 +570,7 @@ ul.notes { margin: 0; padding-left: 1.2em; display: grid; gap: 6px; color: var(-
   }
 
   function renderDecisionTable() {
+    if (!ep.decisions[0].probs) return renderGptDecisionTable();
     const head = `<thead><tr><th class="num">step</th><th>抽中的动作</th><th>8 个动作的概率</th><th>最高概率</th><th class="num">置信度</th><th class="num">帧</th><th class="num">步数</th><th class="num">实际位移</th><th>夹爪</th></tr></thead>`;
     const rows = ep.decisions.map((d) => {
       const top = d.probs.indexOf(Math.max(...d.probs));
@@ -547,10 +599,23 @@ ul.notes { margin: 0; padding-left: 1.2em; display: grid; gap: 6px; color: var(-
     });
   }
 
-  // ---------- charts ----------
-  let topdownXY = () => [0, 0], distX = () => 0, distY = () => 0;
+  // GPT-6 gives one JSON reply per call and no probabilities; re-calls (invalid replies) count in "调用".
+  function renderGptDecisionTable() {
+    const head = `<thead><tr><th class="num">step</th><th>选中的动作</th><th>GPT-6 原始输出</th><th class="num">调用</th><th class="num">用时</th><th class="num">帧</th><th class="num">步数</th><th class="num">实际位移</th><th>夹爪</th><th class="num">开口</th></tr></thead>`;
+    const rows = ep.decisions.map((d) => `<tr data-d="${d.step}" data-f="${d.first_frame}">
+        <td class="num">${d.step}</td><td>${tokChip(d.token)}</td><td><code>${esc(d.raw)}</code></td>
+        <td class="num">${d.calls}</td><td class="num">${d.latency_s.toFixed(1)} s</td>
+        <td class="num">${d.first_frame}–${d.first_frame + d.frame_count - 1}</td><td class="num">${d.frame_count}</td>
+        <td class="num">${d.travelled_m == null ? "—" : (d.travelled_m * 100).toFixed(1) + " cm"}</td>
+        <td>${d.gripper_closed ? "闭合" : "张开"}</td><td class="num">${(d.gripper_width * 1000).toFixed(0)} mm</td></tr>`).join("");
+    $("#dec-table").innerHTML = head + `<tbody>${rows}</tbody>`;
+    $("#dec-table").querySelectorAll("tbody tr").forEach((tr) => tr.addEventListener("click", () => seekFrame(+tr.dataset.f)));
+  }
 
-  function drawAll() { drawStrip(); drawTrace(); drawTopdown(); drawDist(); update(); }
+  // ---------- charts ----------
+  let topdownXY = () => [0, 0], distX = () => 0, distY = () => 0, liftX = () => 0;
+
+  function drawAll() { drawStrip(); drawTrace(); drawTopdown(); drawDist(); if ($("#lift")) liftX = drawLift($("#lift"), ep, 0, ep.decisions.length - 1, true); update(); }
 
   function drawStrip() {
     const host = $("#strip"); if (!host) return; host.innerHTML = "";
@@ -563,7 +628,8 @@ ul.notes { margin: 0; padding-left: 1.2em; display: grid; gap: 6px; color: var(-
       const r = el("rect", { class: "seg", x, y: top, width: w, height: bh, rx: 3 }, g);
       if (w >= 20) { const t = el("text", { class: "seg-label" + (KIND[d.token] === "grasp" ? " on-yellow" : ""), x: x + w / 2, y: top + bh / 2 + 3.5, "text-anchor": "middle" }, g); t.textContent = SHORT[d.token]; }
       r.addEventListener("click", () => seekFrame(d.first_frame));
-      r.addEventListener("mousemove", (ev) => showTip(`<b>step ${d.step} · ${d.token}</b><span class="mono">帧 ${d.first_frame}–${d.first_frame + d.frame_count - 1}（${d.frame_count} 步）</span><span class="mono">置信度 ${d.confidence.toFixed(2)}</span>`, ev.clientX, ev.clientY));
+      const extra = d.probs ? `置信度 ${d.confidence.toFixed(2)}` : `${P.name} 用时 ${d.latency_s.toFixed(1)} s`;
+      r.addEventListener("mousemove", (ev) => showTip(`<b>step ${d.step} · ${d.token}</b><span class="mono">帧 ${d.first_frame}–${d.first_frame + d.frame_count - 1}（${d.frame_count} 步）</span><span class="mono">${extra}</span>`, ev.clientX, ev.clientY));
       r.addEventListener("mouseleave", hideTip);
     });
     const ticks = niceTicks(0, n / ep.fps, 6);
@@ -674,9 +740,137 @@ ul.notes { margin: 0; padding-left: 1.2em; display: grid; gap: 6px; color: var(-
     hit.addEventListener("click", (ev) => seekFrame(ep.decisions[at(ev)].first_frame));
   }
 
+  function liftLegend(e) {
+    return `<div class="legend"><span class="sw ln k-hand"><i></i>手（两块垫中间）</span><span class="sw ln k-obj"><i></i>${esc(e.target)}（物体根坐标）</span><span class="sw k-grasp"><i></i>选了 GRASP</span><span class="sw k-release"><i></i>选了 RELEASE</span></div>`;
+  }
+  // Hand and target-object height before decisions from..to of episode e; returns the decision → x scale.
+  // linked: the inspector's own chart (a click seeks its video); otherwise a click opens the episode there.
+  function drawLift(host, e, from, to, linked) {
+    host.innerHTML = "";
+    const W = Math.max(280, host.clientWidth), H = 230, m = { l: 48, r: 16, t: 12, b: 32 };
+    const pw = W - m.l - m.r, ph = H - m.t - m.b, idx = [];
+    for (let i = from; i <= to; i++) idx.push(i);
+    const hand = idx.map((i) => e.decisions[i].ee[2]), obj = idx.map((i) => e.target_z[i]);
+    let lo = Math.min(...hand, ...obj), hi = Math.max(...hand, ...obj); const pad = (hi - lo) * 0.1 || 0.02; lo -= pad; hi += pad;
+    const sx = (i) => m.l + (to > from ? (i - from) / (to - from) : 0.5) * pw, sy = (v) => m.t + (1 - (v - lo) / (hi - lo)) * ph;
+    const svg = el("svg", { width: W, height: H, viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": `每次决策前手和 ${e.target} 的高度` }, host);
+    const g = el("g", { class: "grid" }, svg);
+    niceTicks(lo, hi, 4).forEach((v) => { el("line", { x1: m.l, x2: m.l + pw, y1: sy(v), y2: sy(v) }, g); const t = el("text", { class: "ann", x: m.l - 6, y: sy(v) + 3.5, "text-anchor": "end" }, svg); t.textContent = v.toFixed(2); });
+    niceTicks(from, to, 6).filter(Number.isInteger).forEach((v) => { const t = el("text", { class: "ann", x: sx(v), y: H - 16, "text-anchor": "middle" }, svg); t.textContent = v; });
+    const ax = el("text", { class: "ann", x: m.l + pw / 2, y: H - 2, "text-anchor": "middle" }, svg); ax.textContent = "决策 step";
+    const ay = el("text", { class: "ann", x: 4, y: m.t + 8 }, svg); ay.textContent = "z 米";
+    el("polyline", { class: "series s-obj", points: idx.map((i, k) => `${sx(i).toFixed(1)},${sy(obj[k]).toFixed(1)}`).join(" ") }, svg);
+    el("polyline", { class: "series s-hand", points: idx.map((i, k) => `${sx(i).toFixed(1)},${sy(hand[k]).toFixed(1)}`).join(" ") }, svg);
+    idx.forEach((i, k) => { const t = e.decisions[i].token; if (t === "GRASP" || t === "RELEASE") el("circle", { class: `mark k-${KIND[t]}`, cx: sx(i), cy: sy(hand[k]), r: 5 }, svg); });
+    if (linked) el("line", { class: "nowline", id: "lift-now", x1: sx(from), x2: sx(from), y1: m.t, y2: m.t + ph }, svg);
+    const cross = el("line", { class: "crosshair", x1: 0, x2: 0, y1: m.t, y2: m.t + ph, visibility: "hidden" }, svg);
+    const hit = el("rect", { class: "hit", x: m.l, y: m.t, width: pw, height: ph }, svg);
+    const at = (ev) => { const r = svg.getBoundingClientRect(); return from + Math.round(Math.min(1, Math.max(0, (ev.clientX - r.left - m.l) / pw)) * (to - from)); };
+    hit.addEventListener("mousemove", (ev) => {
+      const i = at(ev), d = e.decisions[i], dz = (d.ee[2] - e.target_z[i]) * 100;
+      cross.setAttribute("x1", sx(i)); cross.setAttribute("x2", sx(i)); cross.setAttribute("visibility", "visible");
+      showTip(`<b>step ${i} 决策前 · 选了 ${d.token}</b><span class="mono">手 z ${d.ee[2].toFixed(3)} m</span><span class="mono">${esc(e.target)} z ${e.target_z[i].toFixed(3)} m</span><span class="mono">手比物体高 ${dz.toFixed(1)} cm</span><span>夹爪${d.gripper_closed ? "闭合" : "张开"} · 开口 ${(d.gripper_width * 1000).toFixed(0)} mm</span>`, ev.clientX, ev.clientY);
+    });
+    hit.addEventListener("mouseleave", () => { cross.setAttribute("visibility", "hidden"); hideTip(); });
+    hit.addEventListener("click", (ev) => { const i = at(ev); if (linked) seekFrame(e.decisions[i].first_frame); else openEpisode(e.source_id, i); });
+    return sx;
+  }
+
+  // ---------- case analysis ----------
+  function openEpisode(sourceId, step) {
+    for (const [b, bd] of Object.entries(data.benchmarks)) {
+      const i = bd.episodes.findIndex((x) => x.source_id === sourceId);
+      if (i < 0) continue;
+      selectBench(b, i, true);
+      $("#workspace").scrollIntoView({ block: "start" });
+      if (step != null) seekFrame(ep.decisions[Math.min(step, ep.decisions.length - 1)].first_frame);
+      return;
+    }
+  }
+  function renderCase() {
+    const box = $("#case");
+    box.hidden = !data.case_html; $("#jump-case").hidden = !data.case_html;
+    if (!data.case_html) { box.innerHTML = ""; return; }
+    box.innerHTML = data.case_html;
+    box.querySelectorAll("a[data-ep]").forEach((a) => a.addEventListener("click", (ev) => {
+      ev.preventDefault(); openEpisode(a.dataset.ep, a.dataset.step == null ? null : +a.dataset.step);
+    }));
+    drawCaseCharts();
+  }
+  function drawCaseCharts() {
+    const all = Object.values(data.benchmarks).flatMap((b) => b.episodes);
+    document.querySelectorAll("#case [data-lift]").forEach((host) => {
+      const e = all.find((x) => x.source_id === host.dataset.lift);
+      if (!e || !e.target_z) { host.innerHTML = `<p class="empty-note">这个回合不在本页的数据里。</p>`; return; }
+      if (!host.dataset.legend) { host.insertAdjacentHTML("beforebegin", liftLegend(e)); host.dataset.legend = "1"; }
+      const to = host.dataset.to != null ? Math.min(+host.dataset.to, e.decisions.length - 1) : e.decisions.length - 1;
+      drawLift(host, e, +(host.dataset.from || 0), to, false);
+    });
+  }
+
   // ---------- input format ----------
+  // Section headings in bold accent, the privileged object positions in red.
+  function highlightPrompt(text) {
+    let inObjects = false;
+    return text.split("\n").map((line) => {
+      const h = /^(State:|INPUTS|ACTIONS|HOW TO ACT|OUTPUT|CURRENT OBSERVATION|Question:|Candidates:|Answer with exactly one candidate label\.|Task instruction:|Robot state:|Recent actions)/.test(line);
+      if (/^Object positions/.test(line)) inObjects = true; else if (inObjects && !/^\s{2}\S/.test(line)) inObjects = false;
+      const cls = h ? "hl" : (inObjects ? "priv" : "");
+      return cls ? `<span class="${cls}">${esc(line)}</span>` : esc(line);
+    }).join("\n");
+  }
+  const GPT_FLOW = [
+    ["读观测", "场景相机、腕部相机、触觉拼图、手的位姿、物体坐标、最近 5 个动作（含 GRASP、RELEASE）"],
+    ["拼成请求", "system 是说明文字和输出格式；user 先是当前观测的文字，再是三张图"],
+    ["GPT-6 回答", "只回一段 JSON <code>{\"decision\": 动作}</code>，不传 temperature"],
+    ["检查输出", "解析不了或不是 8 个动作之一，就用同一份观测重新问，最多 3 次"],
+    ["解释器执行", "<code>AtomicExec</code> 走若干个 env 步，每步录一帧，然后回到 1"],
+  ];
+  function renderGptInput(p, b, first) {
+    $("#input-title").textContent = "GPT-6 每次收到什么、返回什么";
+    $("#input-intro").innerHTML = "下面是当前 benchmark 第一个回合<b>第 0 次决策</b>的真实输入，取自这个回合的调用日志（<code>gpt_calls/system_prompt.txt</code> 和 <code>calls.jsonl</code>），和发给 GPT-6 的一字不差。";
+    $("#flow").innerHTML = GPT_FLOW.map(([k, v]) => `<li><b>${k}</b>${v}</li>`).join("");
+    $("#sys-label").textContent = "说明文字和输出格式，每个 benchmark 一份（场景相机的方向和控制步长不同）";
+    $("#sys-prompt").innerHTML = highlightPrompt(b.system);
+    $("#req-label").innerHTML = "rollout 端发给 <code>POST …/v1/chat/completions</code> 的 JSON（文字和图片省略）";
+    $("#req-body").textContent = JSON.stringify({
+      model: p.model,
+      response_format: { type: "json_object" },
+      messages: [
+        { role: "system", content: `<左边的说明文字，${b.system.length.toLocaleString()} 字>` },
+        { role: "user", content: [
+          { type: "text", text: `<当前观测，${b.user_text.length.toLocaleString()} 字，见右侧>` },
+          ...["场景相机", "腕部相机", "触觉拼图"].map((n) => ({ type: "image_url", image_url: { url: `data:image/png;base64,<${n}>` } })),
+        ] },
+      ],
+    }, null, 2);
+    $("#user-label").textContent = "先是一段文字，再是三张图";
+    $("#prompt-imgs").before($("#user-text"));
+    const at = b.attempt, u = at.usage || {}, reasoning = (u.completion_tokens_details || {}).reasoning_tokens;
+    $("#out-title").textContent = "GPT-6 返回的结果";
+    $("#out-table").innerHTML = `<thead><tr><th>项目</th><th>内容</th></tr></thead><tbody>
+      <tr><td>原始输出</td><td><code>${esc(at.raw_output)}</code></td></tr>
+      <tr><td>解析出的动作</td><td>${tokChip(b.decision)}</td></tr>
+      <tr><td>prompt tokens</td><td class="mono">${u.prompt_tokens ?? "—"}（三张图加文字）</td></tr>
+      <tr><td>completion tokens</td><td class="mono">${u.completion_tokens ?? "—"}${reasoning ? `，其中推理 ${reasoning}` : ""}</td></tr>
+      <tr><td>用时</td><td class="mono">${at.latency_s.toFixed(2)} s</td></tr>
+      <tr><td>模型</td><td class="mono">${esc(at.model)}</td></tr></tbody>`;
+    $("#out-notes").innerHTML = `
+      <h3>这次调用（${esc(first.source_id)}，step ${b.call_index}）</h3>
+      <ul class="notes">
+        <li>GPT-6 生成一段文字，rollout 端用 <code>gpt_rollout/actions.py</code> 的 <code>parse_decision</code> 取出 JSON 对象里唯一的 <code>decision</code>，JSON 前后多出的字符忽略。</li>
+        <li>解析不了或不是 8 个动作之一时，用同一份观测重新调用，最多 3 次，仍不合法就把回合记为失败。重新调用期间仿真暂停。</li>
+        <li>不传 temperature（GPT-6 不接受这个参数），所以同一份观测两次调用的结果可能不同，同一个种子也不能复现。</li>
+      </ul>`;
+  }
   function renderInput() {
     const p = data.prompts, b = p[bench], first = data.benchmarks[bench].episodes[0];
+    $("#prompt-imgs").innerHTML = [["agentview", "图 1 · 场景相机（224×224）"], ["wrist", "图 2 · 腕部鱼眼相机（224×224）"], ["tactile", "图 3 · 触觉拼图（原尺寸 1542×626）"]]
+      .map(([k, c]) => `<figure><img src="${b.images[k]}" alt="${c}" loading="lazy"><figcaption>${c}</figcaption></figure>`).join("");
+    $("#user-text").innerHTML = highlightPrompt(b.user_text);
+    if (p.policy === "gpt") return renderGptInput(p, b, first);
+    Object.entries(JEMM_INPUT).forEach(([id, html]) => { $(`#${id}`).innerHTML = html; });
+    $("#prompt-imgs").after($("#user-text"));
     $("#sys-prompt").textContent = p.system;
     const cands = Object.fromEntries(TOKENS.map((t) => [t, p.candidates[t]]));
     $("#req-body").textContent = JSON.stringify({
@@ -684,16 +878,6 @@ ul.notes { margin: 0; padding-left: 1.2em; display: grid; gap: 6px; color: var(-
       questions: { action: { type: "choice", instructions: p.question, criteria: cands } },
       images: ["<场景相机 PNG，base64>", "<腕部相机 PNG，base64>", "<触觉拼图 PNG，base64>"],
     }, null, 2);
-    $("#prompt-imgs").innerHTML = [["agentview", "图 1 · 场景相机（224×224）"], ["wrist", "图 2 · 腕部鱼眼相机（224×224）"], ["tactile", "图 3 · 触觉拼图（原尺寸 1542×626）"]]
-      .map(([k, c]) => `<figure><img src="${b.images[k]}" alt="${c}" loading="lazy"><figcaption>${c}</figcaption></figure>`).join("");
-    const lines = b.user_text.split("\n");
-    let inObjects = false;
-    $("#user-text").innerHTML = lines.map((line) => {
-      const h = /^(State:|INPUTS|ACTIONS|HOW TO ACT|CURRENT OBSERVATION|Question:|Candidates:|Answer with exactly one candidate label\.)/.test(line);
-      if (/^Object positions/.test(line)) inObjects = true; else if (inObjects && !/^\s{2}\S/.test(line)) inObjects = false;
-      const cls = h ? "hl" : (inObjects ? "priv" : "");
-      return cls ? `<span class="${cls}">${esc(line)}</span>` : esc(line);
-    }).join("\n");
     const at = b.attempt, probs = TOKENS.map((t) => at.probabilities[t]), top = probs.indexOf(Math.max(...probs));
     $("#out-table").innerHTML = `<thead><tr><th>标签</th><th>候选动作</th><th>概率</th><th class="num">数值</th><th></th></tr></thead><tbody>` +
       TOKENS.map((t, i) => `<tr><td class="mono">${String.fromCharCode(65 + i)}</td><td>${tokChip(t)}</td>
@@ -715,7 +899,7 @@ ul.notes { margin: 0; padding-left: 1.2em; display: grid; gap: 6px; color: var(-
     $("#tree").textContent = [
       `${data.output_root}/`,
       "├── showharness/<benchmark>/<任务>/rollout_<种子>/   ← 离散：每次决策一条（Show-Harness 格式）",
-      "│   ├── agentview/0000.png …   决策时的场景相机图（发给 JEMM 的那张）",
+      `│   ├── agentview/0000.png …   决策时的场景相机图（发给 ${P.name} 的那张）`,
       "│   ├── wrist/0000.png …       同一时刻的腕部相机图",
       "│   ├── tactile/0000.png …     同一时刻的触觉拼图",
       "│   ├── actions.jsonl          每次决策一行",
@@ -731,7 +915,7 @@ ul.notes { margin: 0; padding-left: 1.2em; display: grid; gap: 6px; color: var(-
       ["step", "第几次决策，等于连续数据里的 decision_index"], ["token", "选中的离散动作，训练标签"], ["kind", "move / grasp / release"],
       ["gripper_closed", "决策前夹爪是否闭合"], ["ee_pose", "决策前手的 [x, y, z, qw, qx, qy, qz]，机器人基座坐标系"],
       ["gripper_width", "决策前两块垫的开口，米（由关节角估算）"], ["agentview / wrist / tactile", "三张图的相对路径"],
-      ["time", "写入时间戳"], ["policy_output", "JEMM 的 8 个概率、置信度、延迟"], ["first_frame / frame_count", "在连续数据里对应的帧"],
+      ["time", "写入时间戳"], ["policy_output", P.output], ["first_frame / frame_count", "在连续数据里对应的帧"],
       ["travelled_m", "MV_* 的实际位移，米"],
     ];
     $("#disc-fields").innerHTML = `<thead><tr><th>字段</th><th>含义</th></tr></thead><tbody>${disc.map(([k, v]) => `<tr><td>${k}</td><td>${v}</td></tr>`).join("")}</tbody>`;
@@ -748,20 +932,58 @@ ul.notes { margin: 0; padding-left: 1.2em; display: grid; gap: 6px; color: var(-
       keys.map((k) => `<tr><td>${k}</td>${rows.map(([, f]) => `<td class="mono">${f[k] ? (f[k].dtype === "video" ? `video ${f[k].shape[1]}×${f[k].shape[0]}` : `${f[k].dtype}[${f[k].shape.join(",")}]`) : "—"}</td>`).join("")}<td>${meaning[k] || ""}</td></tr>`).join("") + "</tbody>";
   }
 
+  // ---------- runs ----------
+  // runs.json: [{id, label, data, title?, generated?, output_root?}]; the optional fields stand in
+  // for a data.json built before the generator wrote them. Without it the page shows data.json alone.
+  function parseHash() {
+    const parts = location.hash.slice(1).split("-"), out = { run: null, bench: "tabero", i: 0 };
+    if (runs.some((r) => r.id && r.id === parts[0])) out.run = parts.shift();
+    if (parts[0] === "tabero" || parts[0] === "robolab") { out.bench = parts[0]; out.i = +parts[1] || 0; }
+    return out;
+  }
+  function loadRun(r, b, i) {
+    run = r;
+    $("#runs").querySelectorAll("button").forEach((btn) => btn.setAttribute("aria-selected", btn.dataset.run === r.id));
+    return fetch(r.data).then((res) => { if (!res.ok) throw new Error(`${r.data} ${res.status}`); return res.json(); }).then((json) => {
+      // Media paths in a data.json are relative to its own folder.
+      const base = r.data.includes("/") ? r.data.slice(0, r.data.lastIndexOf("/") + 1) : "";
+      Object.entries(json.benchmarks).forEach(([bk, bd]) => {
+        bd.episodes.forEach((e) => { e.videos.rgb = base + e.videos.rgb; e.videos.tactile = base + e.videos.tactile; });
+        const im = (json.prompts[bk] || {}).images || {};
+        Object.keys(im).forEach((k) => { im[k] = base + im[k]; });
+      });
+      ["title", "generated", "output_root"].forEach((k) => { if (json[k] == null && r[k] != null) json[k] = r[k]; });
+      data = json; P = POLICY[data.policy] || POLICY.jemm;
+      renderFacts(); renderFormat(); renderCase();
+      const bk = data.benchmarks[b] ? b : Object.keys(data.benchmarks)[0];
+      selectBench(bk, Math.min(i, data.benchmarks[bk].episodes.length - 1), false);
+    });
+  }
+
   // ---------- boot ----------
-  fetch("data.json").then((r) => { if (!r.ok) throw new Error(r.status); return r.json(); }).then((json) => {
-    data = json;
-    renderFacts(); renderFormat();
-    const m = /^#(tabero|robolab)-(\d+)$/.exec(location.hash);
-    const b = m ? m[1] : "tabero", i = m ? Math.min(+m[2], data.benchmarks[m[1]].episodes.length - 1) : 0;
-    selectBench(b, i, false);
+  const failed = (err) => { $("#inspector").innerHTML = `<p class="empty-note">读取试跑数据失败（${esc(err.message)}）。刷新页面再试一次。</p>`; };
+  fetch("runs.json").then((r) => (r.ok ? r.json() : null)).catch(() => null).then((list) => {
+    runs = Array.isArray(list) && list.length ? list : [{ id: "", data: "data.json" }];
+    if (runs.length > 1) {
+      $("#runs").innerHTML = runs.map((r) => `<button role="tab" data-run="${esc(r.id)}">${esc(r.label)}${r.note ? `<small>${esc(r.note)}</small>` : ""}</button>`).join("");
+      $("#runs").querySelectorAll("button").forEach((btn) => btn.addEventListener("click", () => {
+        const r = runs.find((x) => x.id === btn.dataset.run);
+        if (r === run) return;
+        loadRun(r, bench, 0).then(() => { try { history.replaceState(null, "", `#${r.id}`); } catch (_) {} }).catch(failed);
+      }));
+      $("#runs").hidden = false;
+    }
+    const h = parseHash();
+    return loadRun(runs.find((r) => r.id === h.run) || runs[0], h.bench, h.i);
+  }).then(() => {
     // Redraw the charts only when the width changes (video loads change the height).
     let t, width = 0;
     new ResizeObserver((entries) => {
       const w = Math.round(entries[0].contentRect.width);
       if (w === width) return;
-      width = w; clearTimeout(t); t = setTimeout(() => { if (ep) drawAll(); }, 120);
+      width = w; clearTimeout(t); t = setTimeout(() => { if (ep) drawAll(); drawCaseCharts(); }, 120);
     }).observe($("#inspector"));
-  }).catch((err) => { $("#inspector").innerHTML = `<p class="empty-note">读取 data.json 失败（${esc(err.message)}）。刷新页面再试一次。</p>`; });
+    if (location.hash === "#case" && data.case_html) $("#case").scrollIntoView();
+  }).catch(failed);
 })();
 </script>

@@ -28,11 +28,12 @@ def _toward_xy(error: np.ndarray) -> str:
 
 
 class ScriptedPolicy:
-    def __init__(self, obj: str, target: str, hover_m: float = 0.12, place_m: float = 0.15) -> None:
+    def __init__(self, obj: str, target: str, hover_m: float = 0.12, place_m: float = 0.15, grasp_dz: float = 0.0) -> None:
         self.obj = obj
         self.target = target
         self.hover_m = hover_m  # approach height above the object's root
         self.place_m = place_m  # release height above the destination's root
+        self.grasp_dz = grasp_dz  # grasp height above the object's root
 
     def begin_episode(self, benchmark: str, calls_dir: Path, seed: int) -> None:
         self.calls = 0
@@ -46,7 +47,8 @@ class ScriptedPolicy:
         obj = np.asarray(observation.objects[self.obj])
         target = np.asarray(observation.objects[self.target])
         if observation.gripper_closed:
-            if np.linalg.norm(obj - tcp) > HOLD_RADIUS_M:
+            # Held: the object root stays near where it was below the TCP at the grasp.
+            if np.linalg.norm(obj - tcp + [0.0, 0.0, self.grasp_dz]) > HOLD_RADIUS_M:
                 return RELEASE  # empty or lost grasp
             carry_z = target[2] + self.place_m + 0.04
             error = target - tcp
@@ -60,7 +62,7 @@ class ScriptedPolicy:
         error = obj - tcp
         if np.linalg.norm(error[:2]) > ALIGN_TOL_M:
             return "MV_UP" if tcp[2] < obj[2] + self.hover_m - ALIGN_TOL_M else _toward_xy(error)
-        if tcp[2] > obj[2] + ALIGN_TOL_M:
+        if tcp[2] > obj[2] + self.grasp_dz + ALIGN_TOL_M:
             return "MV_DOWN"
         return GRASP
 

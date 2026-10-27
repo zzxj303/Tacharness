@@ -6,5 +6,4 @@ profiles:
     endpoint: <OPENAI_COMPATIBLE_BASE_URL>/v1
     max_attempts: 3
     model: openai/gpt-6-astra
-    temperature: 0
     timeout_s: 60

@@ -32,6 +32,10 @@ fi
 # shared with the JEMM server) unless the caller picks.
 export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0}"
 
+# Franka + TacClaw with the tactile pads' friction raised to static 5 / dynamic 4 (README 5.1);
+# both benchmarks load the robot from this path.
+export TACUMI_FRANKA_USD_PATH="${TACUMI_FRANKA_USD_PATH:-${rollout_root}/configs/tacclaw_pad_friction.usda}"
+
 # Tabero sensor assets downloaded by scripts/setup_env.sh.
 export TACBENCHHUB_TACTILE_ASSETS_DIR="${TACBENCHHUB_TACTILE_ASSETS_DIR:-${tacharness}/inputs/assets/vendor/tacbenchhub/external/tabero/datasets/Tactile_Manipulation_Dataset/assets/data}"
 

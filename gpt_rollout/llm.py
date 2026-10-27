@@ -35,20 +35,20 @@ class LLMClient:
             raise ValueError(f"Unsupported api_mode: {config['api_mode']!r}")
         self.endpoint = str(config["endpoint"]).rstrip("/")
         self.model = str(config["model"])
-        self.temperature = config["temperature"]
+        self.temperature = config.get("temperature")  # omit for models that reject it (GPT-6)
         self.timeout_s = float(config["timeout_s"])
         self.max_attempts = int(config["max_attempts"])
         self._api_key = str(config["api_key"])
 
     def chat(self, messages: list[dict[str, Any]]) -> LLMResponse:
-        body = json.dumps(
-            {
-                "model": self.model,
-                "temperature": self.temperature,
-                "response_format": {"type": "json_object"},
-                "messages": messages,
-            }
-        ).encode("utf-8")
+        request_body: dict[str, Any] = {
+            "model": self.model,
+            "response_format": {"type": "json_object"},
+            "messages": messages,
+        }
+        if self.temperature is not None:
+            request_body["temperature"] = self.temperature
+        body = json.dumps(request_body).encode("utf-8")
         start = time.perf_counter()
         error: Exception | None = None
         for attempt in range(1, self.max_attempts + 1):

@@ -97,14 +97,25 @@ def test_move_is_two_centimetres_closed_loop(tmp_path):
     assert calls[1]["first_frame"] == calls[0]["frame_count"]
     # Orientation is held and the gripper stays open.
     assert all(np.allclose(a[3:7], QUAT) and a[7] == 1.0 for a in adapter.actions)
-    assert "Recent moves, newest first: MV_RIGHT, MV_RIGHT" in calls[2]["input_text"]
+    assert "Recent actions, newest first: MV_RIGHT, MV_RIGHT" in calls[2]["input_text"]
 
 
 def test_grasp_holds_the_close_command(tmp_path):
     adapter, llm = FakeAdapter(max_steps=10_000), FakeLLM([_decision("GRASP")])
     run_episode(adapter, GPTPolicy(llm), tmp_path, max_decisions=1)
     assert adapter.steps >= 10 and adapter.actions[-1][7] == 0.0
-    assert "Recent moves, newest first: none" in _calls(tmp_path)[0]["input_text"]
+    assert "Recent actions, newest first: none" in _calls(tmp_path)[0]["input_text"]
+
+
+def test_grasp_and_release_are_recent_actions(tmp_path):
+    # Without them the observation after a RELEASE repeats the one before the GRASP.
+    adapter = FakeAdapter(max_steps=10_000)
+    llm = FakeLLM([_decision("MV_DOWN"), _decision("GRASP"), _decision("RELEASE"), _decision("MV_UP")])
+    run_episode(adapter, GPTPolicy(llm), tmp_path, max_decisions=4)
+    calls = _calls(tmp_path)
+    assert "Recent actions, newest first: GRASP, MV_DOWN" in calls[2]["input_text"]
+    assert "Recent actions, newest first: RELEASE, GRASP, MV_DOWN" in calls[3]["input_text"]
+    assert calls[3]["observation"]["recent_moves"] == ["RELEASE", "GRASP", "MV_DOWN"]
 
 
 def test_episode_ends_inside_an_action(tmp_path):

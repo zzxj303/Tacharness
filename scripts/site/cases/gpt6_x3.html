@@ -1,0 +1,68 @@
+<!-- Case analysis for the GPT-6 three-times-time-limit trials (README sections 1 and 4.5).
+     Shown by scripts/site/index.html in #case; the page links a[data-ep] to its episodes. -->
+<header>
+  <span class="label">案例分析 · 2026-10-25 第一次试跑 → 2026-10-26 第二次试跑</span>
+  <h2>GPT-6 在原地反复夹和放：原因和改动</h2>
+  <p>同样 7 个任务、三倍时间上限、每个任务 1 个种子，前后跑了两次。下面的回合列表是第二次。</p>
+</header>
+
+<div class="facts">
+  <div class="fact"><span class="label">成功</span><b class="tnum">2/7 → 2/7</b></div>
+  <div class="fact"><span class="label">GRASP 后紧接着 RELEASE</span><b class="tnum">71/73 → 0/16</b></div>
+  <div class="fact"><span class="label">在原时间上限内成功</span><b class="tnum">0 → 2</b></div>
+</div>
+
+<div class="two">
+  <div class="stack">
+    <h3>主要原因</h3>
+    <ul class="notes">
+      <li><b>提示词要求夹爪和物体位置重合才算抓住。</b>手按 2cm 一格移动，物体坐标又是物体的根坐标，两者几乎对不上。GPT-6 合上夹爪后看到位置没对上，就判定没抓住，马上 RELEASE。其实这时开口停在 63–74mm，已经夹住了。</li>
+      <li><b>最近动作只记移动。</b>RELEASE 之后的输入和 GRASP 之前完全一样，GPT-6 不知道自己刚试过，于是一直 GRASP、RELEASE 交替到超时。</li>
+    </ul>
+  </div>
+  <div class="stack">
+    <h3>改了什么</h3>
+    <ul class="notes">
+      <li><b>提示词：</b>物体在两指之间就 GRASP，不需要位置重合；GRASP 之后先用 MV_UP 往上提，掉了再 RELEASE 重抓。</li>
+      <li><b>最近动作：</b>也记 GRASP 和 RELEASE。</li>
+    </ul>
+  </div>
+</div>
+
+<div class="case-block">
+  <h3>两次试跑的结果</h3>
+  <div class="fields">
+    <table>
+      <thead><tr><th>任务</th><th>第一次（2026-10-25）</th><th>第二次（2026-10-26）</th></tr></thead>
+      <tbody>
+        <tr><td><a href="#workspace" data-ep="robolab:BananaInBowlTask:seed_000">RoboLab BananaInBowl</a></td>
+          <td><div class="result-cell"><span class="pill fail">✕ 超时</span><span class="mono">2249 步</span></div></td>
+          <td><div class="result-cell"><span class="pill ok">✓ 成功</span><span class="mono">543 步，原上限 750 以内</span></div></td></tr>
+        <tr><td><a href="#workspace" data-ep="robolab:GrabABagelTask:seed_000">RoboLab GrabABagel</a></td>
+          <td><div class="result-cell"><span class="pill ok">✓ 成功</span><span class="mono">543 步</span></div></td>
+          <td><div class="result-cell"><span class="pill ok">✓ 成功</span><span class="mono">331 步，原上限 450 以内</span></div></td></tr>
+        <tr><td><a href="#workspace" data-ep="tabero:libero_object:task_000:seed_000">Tabero libero_object 0</a></td>
+          <td><div class="result-cell"><span class="pill fail">✕ 超时</span><span class="mono">原地抓放 21 次</span></div></td>
+          <td><div class="result-cell"><span class="pill fail">✕ 超时</span><span class="mono">提起后汤罐滑落</span></div></td></tr>
+        <tr><td><a href="#workspace" data-ep="tabero:libero_10:task_000:seed_000">Tabero libero_10 0</a></td>
+          <td><div class="result-cell"><span class="pill fail">✕ 超时</span><span class="mono">原地抓放</span></div></td>
+          <td><div class="result-cell"><span class="pill fail">✕ 超时</span><span class="mono">番茄酱提起 7 次，每次滑落</span></div></td></tr>
+        <tr><td><a href="#workspace" data-ep="tabero:libero_spatial:task_000:seed_000">Tabero libero_spatial 0</a></td>
+          <td><div class="result-cell"><span class="pill ok">✓ 成功</span><span class="mono">274 步</span></div></td>
+          <td><div class="result-cell"><span class="pill fail">✕ 超时</span><span class="mono">夹碗沿，碗没跟上来</span></div></td></tr>
+        <tr><td><a href="#workspace" data-ep="tabero:libero_goal:task_000:seed_000">Tabero libero_goal 0（开抽屉）</a></td>
+          <td><div class="result-cell"><span class="pill fail">✕ 超时</span></div></td>
+          <td><div class="result-cell"><span class="pill fail">✕ 超时</span><span class="mono">左右来回</span></div></td></tr>
+        <tr><td><a href="#workspace" data-ep="tabero:libero_tactile:task_000:seed_000">Tabero libero_tactile 0（开抽屉）</a></td>
+          <td><div class="result-cell"><span class="pill fail">✕ 超时</span></div></td>
+          <td><div class="result-cell"><span class="pill fail">✕ 超时</span><span class="mono">左右来回</span></div></td></tr>
+      </tbody>
+    </table>
+  </div>
+  <ul class="notes">
+    <li><b>罐子提起后会滑落。</b>TacClaw 闭合角固定，夹不紧圆柱形的罐子，改提示词解决不了。在 <a href="#workspace" data-ep="tabero:libero_object:task_000:seed_000" data-step="23">libero_object 回合</a>的"抓取高度"图里能看到汤罐一边上升一边往下落。</li>
+    <li><b>开抽屉的两个任务</b>只有平移动作，很难完成，GPT-6 在柜子前左右来回。</li>
+    <li><b>每个任务只跑了 1 个种子</b>，GPT-6 每次的输出又不完全一样，成败波动大：libero_spatial 第一次成功、这次失败。</li>
+  </ul>
+  <p class="source">点任务名打开第二次试跑的那个回合。第一次试跑的输出已删除，那一列来自 README 4.5 节。</p>
+</div>

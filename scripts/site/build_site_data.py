@@ -2,7 +2,7 @@
 media/ (half-size web copies of the videos, and the three images of the prompt shown).
 
 Run in TacHarness's LeRobot runtime (needs pyarrow); scripts/site/build_site.sh does this.
-Usage: build_site_data.py <output_root> <prompts.json> <site_dir> [--title TEXT]
+Usage: build_site_data.py <output_root> <prompts.json> <site_dir> [--title TEXT] [--case FRAGMENT.html]
 """
 
 import argparse
@@ -11,10 +11,13 @@ import json
 import math
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pyarrow.parquet as pq
-from site_layout import BENCHMARKS, TOKENS, episode_dirs, published
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from scripts.site.site_layout import BENCHMARKS, TOKENS, episode_dirs, published  # noqa: E402
 
 ROLLOUT_ROOT = Path(__file__).resolve().parents[2]
 VIDEO_KEYS = {"rgb": "observation.images.rgb_dual_view", "tactile": "observation.images.tacumi_tactile_composite"}
@@ -27,6 +30,7 @@ parser.add_argument("output_root", type=Path)
 parser.add_argument("prompts", type=Path)
 parser.add_argument("site_dir", type=Path)
 parser.add_argument("--title", default="TacClaw Rollout 浏览")
+parser.add_argument("--case", type=Path, help="HTML fragment shown as the page's case-analysis section")
 args = parser.parse_args()
 root, site = args.output_root.resolve(), args.site_dir
 media = site / "media"
@@ -64,7 +68,24 @@ try:
     root_label = str(root.relative_to(ROLLOUT_ROOT))
 except ValueError:
     root_label = str(root)
-data = {"title": args.title, "output_root": root_label, "generated": datetime.date.today().isoformat(), "benchmarks": {}}
+prompts = json.loads(args.prompts.read_text(encoding="utf-8"))
+data = {
+    "title": args.title,
+    "output_root": root_label,
+    "generated": datetime.date.today().isoformat(),
+    "policy": prompts["policy"],
+    "benchmarks": {},
+}
+if args.case:
+    data["case_html"] = args.case.read_text(encoding="utf-8")
+
+
+def policy_fields(output):
+    """What the decision table shows of one decision's policy calls (re-calls included)."""
+    if "probabilities" in output[0]:  # JEMM
+        return {"probs": [output[0]["probabilities"][t] for t in TOKENS], "confidence": output[0]["confidence"]}
+    return {"raw": output[-1]["raw_output"], "calls": len(output), "latency_s": round(sum(a["latency_s"] for a in output), 2)}
+
 for benchmark in BENCHMARKS:
     dataset = root / "lerobot_v3" / benchmark
     if not (dataset / "meta" / "info.json").is_file():
@@ -135,21 +156,21 @@ for benchmark in BENCHMARKS:
             "max_decisions": result.get("max_decisions"),
             "decisions_count": result["decisions"],
             "wall_seconds": result["wall_seconds"],
-            "policy_seconds": result["policy_seconds"],
+            "policy_seconds": result.get("policy_seconds", result.get("gpt_seconds")),
             "fps": fps,
             "videos": videos,
             "target": target,
             "objects": objects0,
             "start_position": calls[0]["observation"]["position"],
             "distances": distances,
+            # Height of the object to pick before each decision (privileged, from the call log).
+            "target_z": [round(c["observation"]["objects"][target][2], 4) for c in calls] if target else None,
             "decisions": [
                 {
                     "step": d["step"], "token": d["token"], "first_frame": d["first_frame"],
                     "frame_count": d["frame_count"], "travelled_m": d["travelled_m"],
                     "ee": [round(v, 4) for v in d["ee_pose"][:3]], "gripper_closed": d["gripper_closed"],
-                    "gripper_width": d["gripper_width"],
-                    "probs": [d["policy_output"][0]["probabilities"][t] for t in TOKENS],
-                    "confidence": d["policy_output"][0]["confidence"],
+                    "gripper_width": d["gripper_width"], **policy_fields(d["policy_output"]),
                 }
                 for d in decisions
             ],  # fmt: skip
@@ -176,9 +197,8 @@ for benchmark in BENCHMARKS:
         "episodes": episodes,
     }
 
-prompts = json.loads(args.prompts.read_text(encoding="utf-8"))
 data["prompts"] = prompts
-# The three images JEMM saw on that decision 0.
+# The three images the policy saw on that decision 0.
 for benchmark in data["benchmarks"]:
     prompts[benchmark]["images"] = {}
     for view in ("agentview", "wrist", "tactile"):

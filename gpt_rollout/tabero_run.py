@@ -1,7 +1,8 @@
 """Collect rollouts for one Tabero task (one Isaac process per task).
 
 Run through scripts/isaac_python.sh, which sets the Isaac runtime and paths. With
---policy jemm (the default) the JEMM server (scripts/jemm_serve.sh) must be running.
+--policy gpt (the default, GPT-6 astra from configs/llm.yaml) configs/llm.yaml must exist;
+with --policy jemm the JEMM server (scripts/jemm_serve.sh) must be running.
 """
 
 from __future__ import annotations
@@ -22,7 +23,7 @@ parser.add_argument("--seed-start", type=int, default=0)
 parser.add_argument("--num-seeds", type=int, default=50)
 parser.add_argument("--output-root", type=Path, required=True)
 parser.add_argument("--device", default="cuda")
-parser.add_argument("--policy", choices=("jemm", "gpt", "scripted"), default="jemm")
+parser.add_argument("--policy", choices=("jemm", "gpt", "scripted"), default="gpt")
 parser.add_argument("--jemm-endpoint", default="http://127.0.0.1:8790")
 parser.add_argument(
     "--time-limit-scale",
@@ -43,6 +44,7 @@ parser.add_argument(
 )
 parser.add_argument("--no-record", action="store_true", help="measurement only: keep the GPT call log and results, skip the per-frame data")
 parser.add_argument("--scripted-place-m", type=float, default=0.15, help="scripted policy: release height above the target")
+parser.add_argument("--scripted-grasp-dz", type=float, default=0.0, help="scripted policy: grasp height above the object's root")
 args = parser.parse_args()
 if args.disable_time_out and args.max_decisions is None:
     args.max_decisions = MAX_DECISIONS  # nothing else would end an unsuccessful episode
@@ -190,7 +192,7 @@ def main() -> None:
         policy = GPTPolicy(LLMClient())
     else:
         goal = env_cfg.libero_config.goals[0]
-        policy = ScriptedPolicy(goal["ref_obj"], goal["target"], place_m=args.scripted_place_m)
+        policy = ScriptedPolicy(goal["ref_obj"], goal["target"], place_m=args.scripted_place_m, grasp_dz=args.scripted_grasp_dz)
     task_name = f"task_{args.task_id:03d}"
     meta = {
         "benchmark": "tabero",

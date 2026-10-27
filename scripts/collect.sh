@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Collect rollouts for every task of one benchmark (README section 0.2): one Isaac process
-# per task, 50 seeds each by default. Safe to re-run: finished seeds are skipped. The JEMM
-# server (scripts/jemm_serve.sh) must be running.
+# per task, 50 seeds each by default. Safe to re-run: finished seeds are skipped. The default
+# policy is GPT-6 (configs/llm.yaml); with --policy jemm the JEMM server (scripts/jemm_serve.sh)
+# must be running.
 # Usage: scripts/collect.sh {tabero|robolab} [output_root] [runner args, e.g. --num-seeds 1]
 set -uo pipefail
 

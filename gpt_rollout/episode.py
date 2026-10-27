@@ -11,7 +11,7 @@ from typing import Any, Protocol
 
 from . import MAX_RECALLS, RECENT_MOVES
 from .actions import InvalidOutput, parse_decision
-from .interpreter import MOVE_TOKENS, EpisodeEnded, StepAdapter, execute, make_executor
+from .interpreter import EpisodeEnded, StepAdapter, execute, make_executor
 from .llm import LLMClient, LLMResponse, LLMTransportError
 from .prompts import Observation, build_messages, encode_png, observation_text, resize_with_pad, system_prompt
 
@@ -187,9 +187,10 @@ def run_episode(
             if step_result.done:
                 result = step_result
                 break
-            if decision.token in MOVE_TOKENS:
-                recent_moves.insert(0, decision.token)
-                del recent_moves[RECENT_MOVES:]
+            # GRASP and RELEASE count too: without them the observation after a RELEASE
+            # repeats the one before the GRASP, and the policy grasps again (README 4.5).
+            recent_moves.insert(0, decision.token)
+            del recent_moves[RECENT_MOVES:]
 
     return {
         "success": bool(result.success),

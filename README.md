@@ -4,6 +4,8 @@
 
 **已定（2026-10-24）：策略用 JEMM，取代 GPT-6**（见 1.1 节）。下文沿用的"GPT"字样（包括代码里的 `gpt_rollout/`、`gpt_calls/`）在此之后都指当前策略；GPT-6 的路径仍保留为 `--policy gpt`。
 
+**已定（2026-10-25）：换回 GPT-6（`openai/gpt-6-astra`），`--policy gpt` 成为默认**（见 4.5 节）。JEMM 的路径保留为 `--policy jemm`，1.1 节只适用于它。
+
 写作约定：
 
 - 只记录两类内容：本方案的设计，以及原仓库代码里已有的行为。**不引入新的字段或规则。**
@@ -18,11 +20,12 @@
 | | 状态 |
 |---|---|
 | 环境 | 三个运行环境都已建好（第 0 节）：Isaac Sim 5.1、JEMM 服务（int8，单卡）、LeRobot 发布 |
-| 采集流程 | 已实现并跑通：JEMM 选动作 → Show-Harness `AtomicExec` 执行 → 每个回合写出逐帧（LeRobot v3）和逐决策（Show-Harness）两份数据（第 1、4、7 节） |
-| 时间上限 | 两个 benchmark 都是任务原值的两倍，不限决策次数（0.1 节） |
+| 采集流程 | 已实现并跑通：策略（现为 GPT-6）选动作 → Show-Harness `AtomicExec` 执行 → 每个回合写出逐帧（LeRobot v3）和逐决策（Show-Harness）两份数据（第 1、4、7 节） |
+| 时间上限 | 两个 benchmark 都是任务原值的四倍（2026-10-26 由三倍改），不限决策次数（0.1 节） |
 | 试跑结果 | 两倍时长下 7 个任务各 1 个种子，**全部失败**：手离要抓的物体最近也有 17cm，从没下降到物体的高度（4.4 节）。原时长下的冒烟测试和全量采集的前 11 个回合也全部失败 |
-| 全量采集 | **暂停**，输出已清空。瓶颈是 JEMM 本身，不是时间；继续之前要先定策略怎么改（4.4 节末尾） |
-| 结果浏览 | `scripts/site/build_site.sh` 把一个输出目录做成网页：视频、离散决策、逐帧动作、JEMM 的完整输入输出（7.3 节） |
+| GPT-6 冒烟 | Tabero `libero_object` task 0：仍是超时失败，但手下降到离汤罐 0.5–1.1cm，之后在原地 `GRASP` / `RELEASE` 交替（4.5 节） |
+| 采集 | **暂停（2026-10-25）**：GPT-6，Tabero 46 个和 RoboLab 120 个任务各 1 个种子，四倍时长，还没决定要不要全量。同样 7 个任务试跑了四次（4.5、4.6 节）：第一次 2/7、改提示词后 2/7、触觉垫摩擦系数改成 5/4 后 5/7、**再改成四倍时长后 5/7**（成败的任务换了两个，见 4.6 节末尾）。JEMM 的全量采集已停，输出已清空 |
+| 结果浏览 | `scripts/site/build_site.sh` 把一个输出目录做成网页：视频、离散决策、逐帧动作、策略的完整输入输出，可以附一节案例分析（7.3 节）。JEMM 和 GPT-6 的输出都支持 |
 
 ---
 
@@ -59,7 +62,7 @@
 | `.venv-jemm` | JEMM 服务（torch 2.12.1+cu126、transformers 5.20.2、peft 0.21.2、bitsandbytes 0.50.2、`jemm@6822fe0`） | `uv venv --python 3.12 .venv-jemm`，再装上述包和 `jemm @ git+https://github.com/ypcypc/JEMM@6822fe0fd53c5e6670af6ba99fb2c857a661e532` |
 | `.conda/tacharness-lerobot312` | 发布 LeRobot v3（lerobot 0.6.0） | `TacHarness/scripts/setup_lerobot312_runtime.sh`；设 `TACHARNESS_HF_HOME` 指向环境目录之外，否则脚本会先建出环境目录再报"目录已存在"。脚本最后的自检在这个 commit 上会失败（找不到 `tacharness` 包），不影响使用 |
 
-用 `--policy gpt` 时还要把 `configs/llm.example.yaml` 复制成 `configs/llm.yaml`，填入端点和 key（`llm.yaml` 不进仓库）。
+默认的 `--policy gpt` 要把 `configs/llm.example.yaml` 复制成 `configs/llm.yaml`，填入端点和 key（`llm.yaml` 不进仓库）。
 
 **本机遇到的两个环境问题**（已在 `scripts/` 里处理）`[代码]`：
 
@@ -69,9 +72,10 @@
 **运行方法** `[代码]`：
 
 ```bash
-scripts/jemm_serve.sh > logs/jemm_serve.log 2>&1 &              # JEMM 服务，GPU 0，int8，端口 8790
+scripts/jemm_serve.sh > logs/jemm_serve.log 2>&1 &              # 只有 --policy jemm 要：JEMM 服务，GPU 0，int8，端口 8790
 scripts/collect.sh tabero  outputs/collect                        # Tabero 46 个任务，每个 50 个种子，可断点续跑
 scripts/collect.sh robolab outputs/collect                        # RoboLab 120 个任务
+scripts/collect_parallel.sh outputs/collect_gpt6_x3               # 两个 benchmark 每个任务 1 个种子，3 个进程并行（4.5 节）
 scripts/isaac_python.sh -m gpt_rollout.tabero_run --task-suite libero_object --task-id 7 --num-seeds 1 \
     --output-root outputs/smoke                                   # 单个任务
 scripts/site/build_site.sh outputs/smoke                          # 把输出做成结果浏览网页（7.3 节）
@@ -100,11 +104,15 @@ scripts/site/build_site.sh outputs/smoke                          # 把输出做
 
 **已定（2026-10-24）：两个 benchmark 都把每个任务自己的时间上限放大两倍，并去掉"每回合最多 200 次决策"的上限。** 我们是收集 rollout，不是评测。`[代码]`
 
-- 做法：环境建好后把 `cfg.episode_length_s` 乘以 `--time-limit-scale`（默认 2，`gpt_rollout/__init__.py` 的 `TIME_LIMIT_SCALE`）。IsaacLab 每次判断超时都从这个值现算步数（`TacHarness/thirdparty/IsaacLab/source/isaaclab/isaaclab/envs/manager_based_rl_env.py:96-103`），所以建好后再改也生效。实现见 `gpt_rollout/sim.py` 的 `scale_time_limit`。
-- 放大后：Tabero 320 步（`libero_10` 640 步）；RoboLab 各任务为原 `episode_length_s` 的两倍，例如 BananaInBowl 从 750 步变成 1,500 步。
+**已定（2026-10-25）：改为放大三倍。**
+
+**已定（2026-10-26）：改为放大四倍。** 三倍时长下 `libero_object` 在第 471 步成功，离上限 480 只差 9 步（4.6 节）。下面的数字已按四倍更新。
+
+- 做法：环境建好后把 `cfg.episode_length_s` 乘以 `--time-limit-scale`（默认 4，`gpt_rollout/__init__.py` 的 `TIME_LIMIT_SCALE`）。IsaacLab 每次判断超时都从这个值现算步数（`TacHarness/thirdparty/IsaacLab/source/isaaclab/isaaclab/envs/manager_based_rl_env.py:96-103`），所以建好后再改也生效。实现见 `gpt_rollout/sim.py` 的 `scale_time_limit`。
+- 放大后：Tabero 640 步（`libero_10` 1,280 步）；RoboLab 各任务为原 `episode_length_s` 的四倍，例如 BananaInBowl 从 750 步变成 3,000 步。
 - 去掉决策上限后，回合只由成功、放大后的超时、物体掉落结束。每个决策至少占 1 个 env 步，所以回合一定会结束。只有关掉超时的测量模式（`--disable-time-out`）仍用 200 次。
 - 每个回合的结果同时记录原上限 `max_episode_steps`、放大后的上限 `episode_step_limit`、倍数 `time_limit_scale`，以及是否在原上限内成功 `success_within_max_episode_steps`（两个 benchmark 都记）。
-- Tabero 放大两倍可能仍然不够：按第 4.2 节，一次不出错的抓放约 500–630 步。两倍时长试跑（4.4 节）里 JEMM 离完成还差得很远，瓶颈不在时间，所以暂不再放大。
+- Tabero 放大两倍可能仍然不够：按第 4.2 节，一次不出错的抓放约 500–630 步。两倍时长试跑（4.4 节）里 JEMM 离完成还差得很远，瓶颈不在时间，所以暂不再放大。2026-10-25 改为三倍，2026-10-26 改为四倍（见上）。
 
 - 策略思考时仿真暂停，不占回合时间。
 - **测量模式（2026-10-11 定，仍可用）：** 加 `--disable-time-out`，Tabero 关掉超时终止，最多 200 次决策，用来测一个任务到底要多少步；结果里同时记录"是否在原上限内成功"（`success_within_max_episode_steps`）。正式采集不用这个模式。
@@ -112,6 +120,7 @@ scripts/site/build_site.sh outputs/smoke                          # 把输出做
 以下参数不属于任务本身，按代码默认值处理（已定，2026-10-04）：
 
 - TacClaw 的闭合角用代码默认值 20°，不用环境变量覆盖。
+- **例外（已定，2026-10-26）：触觉垫的摩擦系数从静 2、动 1.5 改成静 5、动 4**，TacClaw 的其他参数不变（5.1 节、4.6 节）。
 - Tabero 评测脚本里的 `num_success_steps = 8` 是成功规则的一部分，沿用默认值。
 - Tabero 评测脚本里的 `max_inference_steps = 30`、`replan_steps = 10` 是给 VLA 策略循环用的，GPT 的循环用不到，实际起约束作用的是上面的回合时长。
 
@@ -128,7 +137,7 @@ scripts/site/build_site.sh outputs/smoke                          # 把输出做
 | RoboLab 采哪些任务 | 它自带的全部 120 个 benchmark 任务 |
 | 每个任务采多少条 | 50 条，用 50 个不同的随机种子 |
 | Tabero 的开局 | 不使用示范轨迹，直接采样：用环境的默认重置 |
-| Tabero 的步数上限 | 原值 160 步（`libero_10` 为 320 步）的两倍：320 步（`libero_10` 640 步），见 0.1 节（2026-10-24 改）。超时、物体掉落两个终止条件按任务配置保留 |
+| Tabero 的步数上限 | 原值 160 步（`libero_10` 为 320 步）的四倍：640 步（`libero_10` 1,280 步），见 0.1 节（2026-10-24 改为两倍，2026-10-25 改为三倍，2026-10-26 改为四倍）。超时、物体掉落两个终止条件按任务配置保留 |
 
 合计：Tabero 46 × 50 = 2,300 次 rollout，RoboLab 120 × 50 = 6,000 次 rollout。**已定（2026-10-24，取代 2026-10-04 的"只记录成功的轨迹"）：成功和失败的轨迹都完整记录**，两者保存的内容相同，用 `success` 区分。每个任务的 `results.jsonl` 仍然每个回合留一行结果（种子、结束原因、步数、调用次数和花费），用来统计成功率和断点续跑。已实现：`gpt_rollout/episode.py:228` 的 `finish_episode` 只追加这一行结果，不再删除失败回合的数据。`[代码]`
 
@@ -191,7 +200,7 @@ RoboLab 上有两种处理方式：
 
 ```
 循环：
-  1. 把当前观测发给策略（第 2 节的 6 项输入，加最近 5 个移动动作）
+  1. 把当前观测发给策略（第 2 节的 6 项输入，加最近 5 个动作）
   2. 策略给出一个离散动作（第 3 节）
   3. 解释器把这个动作展开成若干个 env.step 执行完，每一步录一帧（第 4 节）
   4. 回到 1，直到官方规则判定成功、超时或物体掉落
@@ -200,9 +209,13 @@ RoboLab 上有两种处理方式：
 - **不使用 benchmark 里的示范动作**，只借开局状态和官方成功判定。
 - 没有子目标规划，也不用 Show-Harness 的其他插件。GPT 只输出动作，不输出思考文字。
 - 每次调用互相独立，不带之前的对话。唯一的记忆是提示词里"最近 5 个移动动作，最新的在前"，这是 Show-Harness 仿真 runner 的 meta-action 提示词本来就有的一行（已定，2026-10-11）。
+- **已定（2026-10-25）：`GRASP`、`RELEASE` 也记进这一行**，改叫 "Recent actions"，仍是最近 5 个，最新的在前。Show-Harness 只记移动动作；那样 `RELEASE` 之后的输入和 `GRASP` 之前完全一样，三倍时长试跑里策略就在原地一直抓放（4.5 节）。`[代码]` `gpt_rollout/episode.py` 的 `run_episode`
+- **已定（2026-10-26）：改写提示词里抓取的两条说明**（`gpt_rollout/prompts.py` 的 `HOW TO ACT`）。原来要求"下降到夹爪位置等于物体位置再 `GRASP`"，并且"夹爪闭合但物体不在夹爪处就算抓失败，`RELEASE` 重来"。移动是 2cm 一格，物体坐标又是根坐标，两者基本对不上，所以三倍时长试跑里 `GRASP` 之后的 73 次决策有 71 次是 `RELEASE`，而当时开口都停在 63–74mm，其实已经夹住了（4.5 节）。现在改成：下降到物体在两指之间就 `GRASP`，不需要位置重合；`GRASP` 之后觉得夹到了就用 `MV_UP` 往上提，物体跟着上来就继续提，掉了或没跟上来就 `RELEASE`，回到物体处再试。同时删掉了"不要选和上一个移动相反的动作，除非走过头了"这一条。`[代码]`
 - 代码：`gpt_rollout/episode.py`（循环）、`gpt_rollout/interpreter.py`（解释器）、`gpt_rollout/prompts.py`（提示词）。`[代码]`
 
 ### 1.1 策略：JEMM
+
+2026-10-25 起默认策略换回 GPT-6（见文首和 4.5 节），本节只适用于 `--policy jemm`。
 
 **已定（2026-10-24）：用 JEMM 取代 GPT-6。** JEMM 是挂在 Qwen3.8-27B 上的 LoRA（`models/JEMM/`）：给它一段状态、一个问题和 2–32 个候选，它返回每个候选的概率。
 
@@ -220,7 +233,7 @@ RoboLab 上有两种处理方式：
 
 ### 1.2 一次请求长什么样 `[代码]`
 
-**每做一次决策，就发一个独立的请求**：一个回合有多少次决策，就发多少次。请求之间没有对话历史，也不带之前的图片；唯一的记忆是文字里最后那行"最近 5 个移动动作"。JEMM 收到的消息由它自己的 `jemm.contract.mm_messages` 拼成：
+**每做一次决策，就发一个独立的请求**：一个回合有多少次决策，就发多少次。请求之间没有对话历史，也不带之前的图片；唯一的记忆是文字里最后那行"最近 5 个动作"（含 `GRASP`、`RELEASE`，1 节）。JEMM 收到的消息由它自己的 `jemm.contract.mm_messages` 拼成：
 
 ```text
 [system]    Choose the best available candidate for the question using only the supplied state.
@@ -232,7 +245,7 @@ RoboLab 上有两种处理方式：
             Task instruction: …
             Robot state: position / orientation / gripper                  ← 每次都变
             Object positions (x, y, z): …                                  ← 特权信息，不进训练数据
-            Recent moves, newest first: …
+            Recent actions, newest first: …
             Question: Which ONE action should the robot take next to carry out the task instruction?
             Candidates:
             A) MV_FWD: move the gripper 2 cm along +x.   …   H) RELEASE: stop the arm, then open the gripper.
@@ -275,7 +288,7 @@ RoboLab 上有两种处理方式：
 | 每个动作做什么 | 见第 3 节；每个方向在场景相机里朝哪边 |
 | 控制步多长 | Tabero 是 1/20 秒，RoboLab 是 1/15 秒；一个移动动作走完 2cm 要几步由手臂决定 |
 | 夹爪 | 只有开和合；张开时两块垫相距 79.7mm，闭合到约 58mm 宽，不能调力 |
-| 最近的移动动作 | 最近 5 个，最新的在前 |
+| 最近的动作 | 最近 5 个，最新的在前，包括 `GRASP`、`RELEASE`（2026-10-25 改，1 节） |
 
 - **已定（2026-10-04）：发给 GPT 的两张相机图缩到 224×224**，和现有 VLA 路径一致：先用黑边补成正方形，再缩放（RoboLab 见 `policies/pi0_family/client.py:97-102`，Tabero 见 `benchmarks/openpi/openpi_inference_client.py:226`、`:802`）。相机本身仍按配置的默认分辨率渲染和录制：RoboLab 的场景相机和腕部相机都是 1280×720；Tabero 的场景相机是 512×512，腕部相机是 1280×720。触觉拼图按 TacHarness 的原始输出发送，不缩放。
 
@@ -345,6 +358,7 @@ RoboLab 上有两种处理方式：
 - ~~每个回合最多 200 次决策（Show-Harness LIBERO runner 的默认值）。~~ 已去掉（2026-10-24，见 0.1 节），只在关掉超时的测量模式下保留。
 - **已定（2026-10-04，沿用）：** GPT 输出不合法时（JSON 解析不了、不是词表里的动作），用同一份观测重新调用；重新调用超过 3 次仍不合法，这次 rollout 记为失败。重新调用期间仿真不前进。只适用于 `--policy gpt`，JEMM 不会有不合法输出（1.1 节）。
 - JSON 对象前后多出来的字符会被忽略。实测网关有时会在回复最前面加一个 `_`（`_{"decision":"MV_FWD"}`），temperature 为 0 时同一份观测重新调用得到的结果完全相同，不忽略的话回合在第 0 步就会被记为失败。`[代码]` `gpt_rollout/actions.py`
+- GPT-6 astra 不接受 `temperature` 参数，传了就返回 400。`configs/llm.yaml` 里不写它，`gpt_rollout/llm.py` 只在配置了时才发送（2026-10-25）。`[代码]`
 
 原仓库里与执行相关的事实：
 
@@ -473,6 +487,123 @@ TacHarness/.venv-isaacsim51/bin/python scripts/progress.py outputs/measure     #
 - [ ] 核对：每个 env.step 都计入步数，包括 `GRASP` / `RELEASE` 前等手臂停稳的那几步。
 - [ ] 核对：GPT 输出不合法时重新调用，超过 3 次记为失败。
 
+### 4.5 实测：GPT-6 astra（2026-10-25）`[代码]`
+
+**已定（2026-10-25）：按 4.4 节的方向 2，换回 GPT-6**，模型是 `openai/gpt-6-astra`（`configs/llm.yaml`）。
+
+Tabero `libero_object` task 0（汤罐放进篮子），种子 0，两倍时长。先不录制跑一次，再在正式采集里录制跑一次：
+
+| | 不录制 | 录制（正式采集的第一条） |
+|---|---|---|
+| 结果 | 失败，320 步超时 | 失败，320 步超时 |
+| 决策 | 33 | 32 |
+| 手离汤罐：开始 → 最近 | 0.30 → 0.005m | 0.30 → 0.011m |
+| 每次调用 | 平均 3.7 秒，约 2,300 个 prompt token | 平均 3.3 秒 |
+| 回合用时 | 188 秒 | 235 秒（含发布） |
+| 不合法输出 | 0 | 0 |
+
+- 两次的动作序列几乎一样：先 12 次 `MV_LEFT` 水平对准，再一路 `MV_DOWN` 到汤罐的高度，然后在原地 `GRASP`、`RELEASE` 交替，直到超时。同一任务上 JEMM 最近也还差 21cm（4.4 节）。
+- 一个回合约 7.7 万个 token，没有一次不合法输出，也没有网络失败。
+
+**本机的采集** `[代码]`：
+
+- 机器：一张 RTX 5090（32GB），没有 `/data`。GPT-6 不占 GPU，3 个 Isaac 进程共占约 21GB 显存。LeRobot 环境按第 0 节的方法新建在 `.conda/tacharness-lerobot312`。为了腾出暂存空间，删掉了 `models/Qwen3.8-27B`；以后再用 `--policy jemm` 要重新下载。
+- 范围（2026-10-25 定）：Tabero 46 个任务和 RoboLab 120 个任务，各 1 个种子（种子 0），四倍时长（2026-10-25 由两倍改为三倍，2026-10-26 改为四倍）。两倍时长下已采的 3 条（`libero_object` task 0–2）在 `outputs/collect_gpt6/`，不并入。
+- 脚本 `scripts/collect_parallel.sh <输出目录>`：3 个进程（`WORKERS`）共用一个任务队列，先跑 Tabero，再按时长从长到短跑 RoboLab。暂存按最坏情况预留磁盘：放大后的步数（倍数读 `TIME_LIMIT_SCALE`）× 每帧 7.5MB（`MB_PER_FRAME`，4.2 节实测约 7MB），另留 8GB（`SAFETY_GB`）。放不下的任务先等，单独跑也放不下的记进 `<输出目录>/.sched/skipped`。按 69GB 可用空间算，RoboLab 最长的 8 个任务（200–300 秒，9,000–13,500 步，66–99GB）会被跳过，180 秒的 17 个任务各要 60GB，只能一个一个跑。重新运行脚本就能续跑，已有种子 0 结果的任务不再排队。`TASKS` 只跑列出的任务（Tabero 写成 `套件:编号`，RoboLab 写类名）。
+- 试跑（2026-10-25）：先跑 4.4 节那 7 个任务，`TASKS="libero_object:0 libero_spatial:0 libero_goal:0 libero_10:0 libero_tactile:0 BananaInBowlTask GrabABagelTask" scripts/collect_parallel.sh outputs/trial_gpt6_x3`。
+- 进度看 `<输出目录>/logs/run.log`；停止时用 SIGKILL 结束 `collect_parallel.sh` 和它启动的 Isaac 进程。
+
+**三倍时长试跑结果（2026-10-25）**：7 个任务各 1 个种子，3 个进程并行，共约 1 小时。输出在 `outputs/trial_gpt6_x3/`。
+
+| 任务 | 结果 | 步数 / 三倍上限（原上限） | 决策 | 手离要抓的物体：开始 → 最近 | `GRASP` | 回合用时 |
+|---|---|---|---|---|---|---|
+| Tabero `libero_object` 0 | 失败，超时 | 480 / 480（160） | 49 | 0.29 → 0.009m | 11 | 420 秒 |
+| Tabero `libero_spatial` 0 | **成功** | 274 / 480（160） | 38 | 0.35 → 0.008m | 1 | 236 秒 |
+| Tabero `libero_goal` 0（开抽屉） | 失败，超时 | 480 / 480（160） | 51 | — | 10 | 487 秒 |
+| Tabero `libero_10` 0 | 失败，超时 | 960 / 960（320） | 94 | 0.20 → 0.009m | 39 | 1124 秒 |
+| Tabero `libero_tactile` 0（开抽屉） | 失败，超时 | 480 / 480（160） | 51 | — | 3 | 738 秒 |
+| RoboLab BananaInBowlTask | 失败，超时 | 2249 / 2250（750） | 168 | 0.35 → 0.009m | 22 | 3058 秒 |
+| RoboLab GrabABagelTask | **成功** | 543 / 1350（450） | 47 | 0.37 → 0.014m | 2 | 1294 秒 |
+
+- 7 个里成功 2 个，都超过了原上限（`success_within_max_episode_steps` 为假）。同样 7 个任务，JEMM 两倍时长时全部失败，最近也差 17cm（4.4 节）。GPT-6 在每个有目标物体的任务里都把手移到了离物体 1.4cm 以内。共 498 次调用、约 118 万 token，没有不合法输出。
+- **主要的失败方式：抓住了却当成没抓住。** `libero_object`、`libero_10` 里，`GRASP` 后开口停在约 70.7mm（没有合到约 58mm 的底，说明夹住了罐子），但下一次决策选的是 `RELEASE`，在同一个位置 `GRASP` / `RELEASE` 交替，直到超时。这时它看到的是：文字里只有 `gripper: closed`（开口宽度不发给策略，第 2 节）；触觉拼图只有一块垫的角上有一点接触，另一块全黑；手比物体的根坐标低约 7mm，只夹到了罐子底边。`libero_tactile` 后半段则是夹爪已经张开还连续 `RELEASE` 20 多次。
+- BananaInBowl：先是抓放循环，每抓一次香蕉被推开一点；后来香蕉卡在张开的夹爪上被带走，又连续 57 次 `MV_LEFT`（−y）把它带到 y = −0.84m，而碗在 +y（0.15m）。可能是把动作名里的 LEFT 和肩部相机画面里的"左"弄混了（这台相机里 +x 才是画面左边，3 节）。
+- RoboLab 暂存实测每帧 6.8MB（BananaInBowl 2,156 帧 14.7GB），比调度脚本预留用的 7.5MB 小约 10%。
+- 循环能一直持续，还因为最近动作那一行只记移动动作：`RELEASE` 之后的输入和 `GRASP` 之前一模一样。**已定（2026-10-25）：`GRASP`、`RELEASE` 也记进这一行**（1 节），之后用同样 7 个任务重新试跑。
+- 之后改了提示词里抓取的两条说明（1 节，2026-10-26），没有改开口宽度、物体坐标和 RoboLab 方向的说明。
+
+**改提示词后的试跑结果（2026-10-26）**：同样 7 个任务、三倍时长，最近动作含 `GRASP`/`RELEASE`，提示词是 1 节 2026-10-26 那一版。按 `TASKS` 的顺序从长到短排队，共 35 分钟。输出在 `outputs/trial_gpt6_x3_prompt/`；上一次的输出已删，对比用上表。
+
+| 任务 | 结果 | 步数 / 三倍上限（原上限） | 决策 | `GRASP` | 回合用时 | 上一次 |
+|---|---|---|---|---|---|---|
+| RoboLab BananaInBowlTask | **成功** | 543 / 2250（750） | 52 | 1 | 19.5 分钟 | 失败 |
+| RoboLab GrabABagelTask | **成功** | 331 / 1350（450） | 33 | 1 | 13.9 分钟 | 成功，543 步 |
+| Tabero `libero_object` 0 | 失败，超时 | 480 / 480（160） | 48 | 2 | 6.6 分钟 | 失败 |
+| Tabero `libero_spatial` 0 | 失败，超时 | 480 / 480（160） | 61 | 5 | 6.8 分钟 | 成功，274 步 |
+| Tabero `libero_goal` 0（开抽屉） | 失败，超时 | 480 / 480（160） | 54 | 2 | 10.1 分钟 | 失败 |
+| Tabero `libero_10` 0 | 失败，超时 | 960 / 960（320） | 132 | 8 | 20.5 分钟 | 失败 |
+| Tabero `libero_tactile` 0（开抽屉） | 失败，超时 | 480 / 480（160） | 53 | 1 | 11.6 分钟 | 失败 |
+
+- 成功仍是 2 个，但两个 RoboLab 任务都在**原上限以内**完成，都只抓了一次：对准、下降、`GRASP`、`MV_UP` 提起，BananaInBowl 再向 +y 移到碗上方放下。上一次 BananaInBowl 往 −y 走的问题这次没出现。
+- **抓放循环没有了**：有目标物体的 5 个任务里，`GRASP` 之后的 16 次决策全部是 `MV_UP`（上一次同样这 5 个任务是 73 次里 71 次 `RELEASE`）。两个开抽屉任务的 3 次 `GRASP` 都是空抓（合到 58mm），之后选了 `MV_RIGHT`。
+- **新的主要失败方式：提起时罐子从夹爪里滑掉。** `libero_object` 和 `libero_10` 里罐子夹住了（开口约 71mm）、也跟着上升，但每提 2cm 罐子只升约 1.5cm，和手的高度差越拉越大，提到 14–20cm 或开始水平移动时掉回桌面；之后按提示词 `RELEASE` 再抓。`libero_10` 抓起来 7 次，每次都掉。TacClaw 闭合角固定 20°，夹持力不能调（3 节），靠提示词解决不了。
+- `libero_spatial` 这次失败：抓的是碗沿（开口 63–70mm），提起 2–3 格碗没跟上来，按提示词 `RELEASE` 再试，5 次都一样。上一次成功的那条碗其实也没被提起来（当时碗高度没变），是被推到了盘子边上满足了判定。GPT-6 不传 temperature，同一开局两次的动作本来就不同。
+- 两个开抽屉的任务：到柜子前下降后，在 `MV_LEFT`/`MV_RIGHT` 之间来回十几次，中间夹着很多次夹爪已经张开时的 `RELEASE`。删掉的"不要选和上一个移动相反的动作"那一条原本就是防这种来回的。
+- 共 433 次调用、约 104 万 token，没有不合法输出。
+
+### 4.6 实测：Tabero 里罐子为什么从夹爪里滑掉（2026-10-26）`[代码]`
+
+用脚本策略（真值坐标，不调用 GPT）在 `libero_object` task 0、种子 0 上抓汤罐，和 4.5 节同一个开局。`--scripted-grasp-dz` 设抓取高度（手比罐子根坐标高多少），移动是 2cm 一格，只能取到下表这几档。
+
+| 抓取高度 | 左垫触觉 | 右垫触觉 | 往上提 |
+|---|---|---|---|
+| −0.7cm | 接触 | 无 | 手升 15.9cm，罐子 12.1cm，一路下滑 |
+| +1.3cm（GPT-6 的高度） | 接触 | 无 | 手升 13.8cm，罐子 8.3cm，之后掉落 |
+| +3.3cm | 接触 | 无 | 罐子几乎不动 |
+| +5.3cm | 接触 | 接触 | 罐子完全不动 |
+| +7.3cm | 无 | 无 | 高过罐顶，空抓（合到 58mm） |
+
+- **手指最大力不是原因。** `TABERO_TACUMI_GRIPPER_EFFORT_LIMIT` 从 20 改成 50（确认 PhysX 里的值变了），三个高度的结果和 20 时完全一样。
+- **决定滑不滑的是触觉垫的动摩擦。** 抓取高度 +1.3cm：只把静摩擦改成 5，罐子照样滑；静 5、动 4 时罐子和手一起升了 13.8cm，夹着搬到离篮子约 6 步时才因为时间上限结束；把整根手指（另外 3 个碰撞体，原来是 PhysX 默认的 0.5）也改成 5/4，结果和只改垫子完全一样。
+- 于是定为只改触觉垫的摩擦系数（0.1 节的例外、5.1 节）。实现：`configs/tacclaw_pad_friction.usda` 叠在 TacHarness 的 `assets/robots/franka_tacumi_dm25pd04.usda` 上，只覆盖 `tactile_grip_material` 的两个摩擦系数（逐项比较合成后的 USD，2,214 个属性里只有这两个不同）；`scripts/isaac_python.sh` 把 `TACUMI_FRANKA_USD_PATH` 指向它，Tabero 和 RoboLab 都从这个路径读机器人。TacHarness 自己的测试 `test_tacumi_droid_source.py:396` 检查的是原文件里的 `staticFriction = 2`，原文件没动。`[代码]`
+- `[待对齐]` **右垫的触觉漏报。** 开口停在 71mm 说明两根手指都被罐子挡住（右手指若没碰到会合到 20°），视频里罐子也被夹起来过；改手指其他碰撞体的摩擦对结果没有影响，说明右侧是用垫子夹住的。但右垫的触觉一直报无接触（Tabero 里两块垫同时有接触的帧只占 76/2,880）。策略看到的触觉拼图和录下的触觉数据右侧可能是错的。可能和 5.5 节"5.1 上力传感器绑到胶面会出问题"有关，还没查。
+
+**改摩擦系数后的试跑结果（2026-10-26）**：同样 7 个任务、三倍时长、提示词同 1 节 2026-10-26 那一版，只多了触觉垫摩擦系数 5/4。输出在 `outputs/trial_gpt6_x3_friction/`，共 31 分钟。
+
+| 任务 | 结果 | 步数 / 三倍上限（原上限） | 决策 | `GRASP` | 4.5 节第二次 |
+|---|---|---|---|---|---|
+| RoboLab BananaInBowlTask | **成功** | 520 / 2250（750） | 52 | 1 | 成功，543 步 |
+| RoboLab GrabABagelTask | **成功** | 294 / 1350（450） | 31 | 1 | 成功，331 步 |
+| Tabero `libero_object` 0 | **成功** | 471 / 480（160） | 54 | 1 | 失败，汤罐滑落 |
+| Tabero `libero_spatial` 0 | **成功** | 336 / 480（160） | 45 | 1 | 失败，碗没跟上来 |
+| Tabero `libero_10` 0 | **成功** | 738 / 960（320） | 100 | 2 | 失败，番茄酱 7 次滑落 |
+| Tabero `libero_goal` 0（开抽屉） | 失败，超时 | 480 / 480（160） | 53 | 3 | 失败 |
+| Tabero `libero_tactile` 0（开抽屉） | 失败，超时 | 480 / 480（160） | 55 | 5 | 失败 |
+
+- 5/7 成功。有目标物体的 5 个任务都只抓了一次（`libero_10` 两个物体各一次），提起和搬运途中没有滑落。`libero_spatial` 这次是把碗提起来搬过去的，不是推过去。
+- 只有两个 RoboLab 任务在原上限内成功；三个 Tabero 成功都超过了原上限（`libero_object` 在 471 步，离三倍上限只差 9 步）。
+- `libero_object` 和 `libero_10` 判定成功时，最后一次决策的观测里罐子还在夹爪里、在篮子上方，按任务自己的规则（水平 < 0.2m、高度差 < 0.2m、有接触）判为成功，和 4.2 节牛奶那条一样。
+- 两个开抽屉任务照旧在柜子前左右来回、空抓，摩擦系数帮不上（只有平移动作，3 节）。
+- 共 390 次调用、约 93 万 token，没有不合法输出。
+
+**四倍时长的试跑结果（2026-10-26）**：和上面完全相同，只把时间上限从三倍改成四倍（0.1 节）。输出在 `outputs/trial_gpt6_x4/`，共 36 分钟。
+
+| 任务 | 结果 | 步数 / 四倍上限（原上限） | 决策 | `GRASP` | 三倍时（上表） |
+|---|---|---|---|---|---|
+| RoboLab BananaInBowlTask | **成功** | 529 / 3000（750） | 53 | 1 | 成功，520 步 |
+| RoboLab GrabABagelTask | **成功** | 313 / 1800（450） | 32 | 1 | 成功，294 步 |
+| Tabero `libero_object` 0 | **成功** | 423 / 640（160） | 51 | 1 | 成功，471 步 |
+| Tabero `libero_spatial` 0 | **成功** | 263 / 640（160） | 36 | 1 | 成功，336 步 |
+| Tabero `libero_tactile` 0（开抽屉） | **成功** | 214 / 640（160） | 27 | 1 | 失败 |
+| Tabero `libero_10` 0 | 失败，超时 | 1280 / 1280（320） | 133 | 8 | 成功，738 步 |
+| Tabero `libero_goal` 0（开抽屉） | 失败，超时 | 640 / 640（160） | 61 | 4 | 失败 |
+
+- 成功的 5 个都在三倍上限（480 步，RoboLab 各自三倍）以内结束，**这次的成败变化都不是时间带来的**，是 GPT-6 每次输出不同。回合一满足成功判定就立即结束，所以时间上限放宽不会改变"罐子还在夹爪里就判成功"（`libero_object` 最后一次观测里罐子仍在手里、在篮子上方）。
+- `libero_tactile` 第一次成功：在把手高度 `GRASP`（开口停在 68mm，夹住了把手），连续 3 次 `MV_RIGHT` 把抽屉拉开。
+- `libero_10` 失败的原因是**搬运时撞到篮子**：番茄酱夹得很稳，提到约 17cm 高后水平移向篮子，途中篮子被推动（x 0.521 → 0.542），番茄酱被撞落在篮子外。之后几次重抓有空抓（开口 78–79mm）也有提起后没跟上（按提示词 `RELEASE` 重试），超时前汤罐一直没动。
+- `libero_goal` 照旧在柜子前左右来回，4 次 `GRASP` 都合到 60–63mm，没夹住把手。
+- 共 393 次调用、约 94 万 token，没有不合法输出。
+
 ---
 
 ## 5. TacClaw 的实现事实 `[代码]`
@@ -491,6 +622,7 @@ TacHarness/.venv-isaacsim51/bin/python scripts/progress.py outputs/measure     #
 | 触觉左右映射 | left = `Link5`，right = `Link4` |
 | 腕部相机 | prim 路径 `.../Gripper/Tacumi/Link3/wrist_cam`，OpenCV 鱼眼模型，渲染 1280×720，四元数顺序 `wxyz`，偏移约定 `ros` |
 | 夹持宽度 | 两块胶面在关节角为 0 时相距 79.7mm（`TacHarness/skills/tacharness-retarget-corpus/SKILL.md`）；闭合到 20° 对应约 58mm 宽的物体（`embodiment.py` 注释） |
+| 摩擦系数 | 触觉垫的接触面绑 `tactile_grip_material`：原值静 2、动 1.5，合并方式 `max`（`assets/robots/franka_tacumi_dm25pd04.usda:63-69`）；手指其余碰撞体用 PhysX 默认 0.5。**已定（2026-10-26）：触觉垫改成静 5、动 4**，见 4.6 节 |
 
 策略 TCP 和厂商相机标定里叫 "TCP" 的 `base_link` 是**两个不同的坐标系**，不能混用。
 
@@ -643,7 +775,7 @@ episode_length_s = 50
 |---|---|---|
 | 一条样本 | 一次 `env.step`（RoboLab 1/15 秒，Tabero 1/20 秒） | 一次调用，也就是一个离散动作，对应若干个 env 步 |
 | 动作 | 解释器交给 `env.step` 的 8 个数 | 第 3 节 8 个离散动作中的一个 |
-| 观测 | 这一步执行之后的画面、触觉和机器人状态（见 7.1 节的帧约定） | 这次调用时的输入：第 2 节第 1–5 项，加最近 5 个移动动作；**不含**第 6 项物体坐标 |
+| 观测 | 这一步执行之后的画面、触觉和机器人状态（见 7.1 节的帧约定） | 这次调用时的输入：第 2 节第 1–5 项，加最近 5 个动作；**不含**第 6 项物体坐标 |
 | 格式 | LeRobot v3，字段沿用 TacHarness 的 rollout 数据集 | Show-Harness 格式，见 7.2 节 |
 | 用来训 | 输出连续动作的策略 | 输出离散动作的模型 |
 
@@ -733,7 +865,8 @@ showharness/<benchmark>/<任务>/rollout_<种子>/   # 逐决策数据（7.2 节
 - 新增的字段不影响转换脚本：它只读 `token`、`agentview`、`wrist`、`gripper_closed`（`rollouts_to_alpaca.py:380-431`）。`[代码]` 触觉图因此不会自动进入训练样本，要用的话需要扩展转换脚本。
 - **不含物体坐标**：`actions.jsonl` 里没有物体坐标这一项，也不保存拼好的输入文字。
 - `metadata.json`：沿用 Show-Harness 的 `task`、`task_text`、`seed`、`env_id`、`step_m`（参照 `Show-Harness/scripts/trajectory/real2sim/robolab/oracle.py:420` 起），另加 `success`、`end_reason`，以及 `results.jsonl` 里这个回合的整行结果。写入器关闭时会自动补上 `num_steps` 和 `token_counts`。`[代码]`
-- 最近动作不用另存：转换脚本按"最近 5 个 `MV_*`，最新的在前"从前面的 `token` 重新算（`rollouts_to_alpaca.py:110`），和第 1 节提示词里的规则一致。`[代码]`
+- 最近动作不用另存：转换脚本按"最近 5 个 `MV_*`，最新的在前"从前面的 `token` 重新算（`rollouts_to_alpaca.py:110`）。`[代码]`
+- `[待对齐]` 2026-10-25 起策略看到的最近动作包括 `GRASP`、`RELEASE`（1 节），和转换脚本重算出来的不再一致。策略实际看到的那一行记在 `calls.jsonl` 每次调用的 `observation.recent_moves` 里。用这份数据训练时，要改转换脚本的重算规则，否则训练样本里的历史和采集时策略看到的不同。
 - **注意：转换脚本会给每个回合的最后一帧合成一条 `DONE` 样本，不管回合成功与否**（`rollouts_to_alpaca.py:116-118`、`:467-474`）。`[代码]` 本方案的动作里没有 `DONE`（第 3 节），而且失败的回合也会被记录。所以转换时要按 `metadata.json` 的 `success` 排除失败的回合，或者去掉合成的 `DONE` 样本。
 
 - [ ] 核对：两份数据的字段里都没有物体真值坐标。
@@ -786,16 +919,20 @@ PY
 
 ```bash
 scripts/site/build_site.sh outputs/trial_x2 outputs/trial_x2/site "TacClaw 两倍时长试跑"
+scripts/site/build_site.sh outputs/trial_gpt6_x3_prompt outputs/trial_gpt6_x3_prompt/site "GPT-6 三倍时长试跑" \
+    scripts/site/cases/gpt6_x3.html                         # 第 4 个参数：案例分析片段（可选）
 ```
 
 在 `<site_dir>` 下生成 `index.html`、`data.json` 和 `media/`，静态网页，可以直接发布或用任意静态服务器打开。内容按 benchmark 分开，每个回合有：
 
 - 同步播放的两路视频（缩小到一半的网页版）；
-- 离散结果：决策时间线和每次决策的 8 个概率，点一下跳到视频对应位置；
-- 连续结果：逐帧目标位置曲线、夹爪和触觉接触状态、手的俯视轨迹、手到要抓的物体的距离；
+- 离散结果：决策时间线和每次决策的策略输出（JEMM 是 8 个概率；GPT-6 是原始输出、调用次数和用时），点一下跳到视频对应位置；
+- 连续结果：逐帧目标位置曲线、夹爪和触觉接触状态、手的俯视轨迹、手到要抓的物体的距离，以及每次决策前手和要抓的物体的高度（标出 `GRASP`、`RELEASE`，悬停看开口宽度）；
 - 同一个动作在两份数据里的原始记录。
 
-另有"输入格式"一节，展示第一个回合第 0 次决策时 JEMM 收到的完整文字和三张图（用 JEMM 自己的 `mm_messages` 重建）以及返回的概率，和"数据格式"一节。脚本在 `scripts/site/`：`build_prompts.py` 在 `.venv-jemm` 里重建提示词，`build_site_data.py` 在 LeRobot 环境里读两份数据并剪视频（需要 `ffmpeg`），`index.html` 是页面模板。
+另有"输入格式"一节，展示第一个回合第 0 次决策时策略收到的完整文字和三张图以及返回的结果（JEMM 用它自己的 `mm_messages` 重建；GPT-6 直接取调用日志里的 `system_prompt.txt` 和 `input_text`），和"数据格式"一节。给了第 4 个参数时，页面开头多一节案例分析，内容是 `scripts/site/cases/` 下的 HTML 片段，里面的回合链接会打开下面对应的回合。**几次试跑合成一页**：把各自的网页目录放在同一个目录下（第一个可以直接放在根目录，其余放子目录），在根目录写 `runs.json`，例如 `[{"id": "jemm", "label": "JEMM · 两倍时长", "data": "data.json"}, {"id": "gpt6", "label": "GPT-6 · 三倍时长", "data": "gpt6/data.json"}]`，再把 `index.html` 放到根目录。页面顶部会多一排切换按钮，回合链接写成 `#gpt6-tabero-2`。旧版生成器写出的 `data.json` 没有 `title`、`generated`、`output_root`，可以在 `runs.json` 的那一项里补上。2026-10-26 JEMM 两倍时长试跑和 GPT-6 三倍时长试跑就是这样合在一页的（本地拼装目录 `outputs/site_merged/`）。
+
+脚本在 `scripts/site/`：`build_prompts.py` 读出提示词（JEMM 输出要在 `.venv-jemm` 里跑，GPT 输出用任意 Python 3），`build_site_data.py` 在 LeRobot 环境里读两份数据并剪视频（需要 `ffmpeg`），`index.html` 是页面模板。
 
 ---
 
@@ -815,7 +952,7 @@ scripts/site/build_site.sh outputs/trial_x2 outputs/trial_x2/site "TacClaw 两�
 **采集范围（0.2 节）**
 - [ ] Tabero 46 个任务、RoboLab 120 个任务，每个任务 50 个种子各一条
 - [ ] Tabero 的开局是环境默认重置的随机采样，没有用示范轨迹
-- [ ] 时间上限是原值的两倍（Tabero 320 步，`libero_10` 640 步；RoboLab 各任务两倍），没有决策次数上限，超时和掉落终止条件开启
+- [ ] 时间上限是原值的四倍（Tabero 640 步，`libero_10` 1,280 步；RoboLab 各任务四倍），没有决策次数上限，超时和掉落终止条件开启
 - [ ] RoboLab 开局相同的处理方式已定
 - [ ] RoboLab 的采集规模已确认
 - [ ] 每条轨迹记录了随机种子

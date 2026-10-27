@@ -55,7 +55,7 @@ SHEAR (shear arrows), HSV (deformation direction and magnitude as colour). An al
 plus whether the gripper is open or closed. The frame is the robot base frame: origin at the arm base, \
 x forward, y to the robot's left, z up. The position is the point midway between the two tactile pads.
 - Object positions: name and x, y, z of each object, in the same robot base frame.
-- Recent moves, newest first.
+- Recent actions, newest first (moves, GRASP and RELEASE).
 
 ACTIONS
 - MV_FWD: move the gripper 2 cm along +x.
@@ -73,14 +73,13 @@ The grip force cannot be adjusted.
 HOW TO ACT
 - Use the scene camera and the object positions to locate the target; use the wrist camera to fine-align when \
 the target is close.
-- To pick up an object, with the gripper open: move above the object, descend until the gripper position is at \
-the object position, GRASP, then lift with MV_UP.
-- GRASP when the object is between the two fingers. An object whose position follows the gripper and is above \
-its resting height is being held. If the gripper is closed but the object is not at the gripper, the grasp \
-failed: RELEASE and try again.
+- To pick up an object, with the gripper open: move above the object and descend until the object is between \
+the two fingers, then GRASP. Moves are 2 cm steps, so the gripper position will not match the object position \
+exactly; it does not need to.
+- After GRASP, if you think the object is between the fingers, lift it with MV_UP. Keep lifting while the object \
+rises with the gripper. If it drops or stays behind, RELEASE, go back to it and try again.
 - To place a held object: lift it clear, move above the destination, lower it until it is just above the \
 destination, then RELEASE and move up.
-- Avoid choosing the opposite of your most recent move unless you overshot.
 """
 
 _GPT_OUTPUT_TEMPLATE = """
@@ -135,7 +134,7 @@ def observation_text(observation: Observation, recent_moves: list[str]) -> str:
     ]
     for name, xyz in observation.objects.items():
         lines.append(f"  {name}: [{', '.join(f'{value:.4f}' for value in xyz)}]")
-    lines.append(f"Recent moves, newest first: {', '.join(recent_moves) or 'none'}")
+    lines.append(f"Recent actions, newest first: {', '.join(recent_moves) or 'none'}")
     return "\n".join(lines)
 
 

@@ -1,0 +1,27 @@
+#usda 1.0
+(
+    defaultPrim = "panda"
+    doc = """TacHarness's Franka + TacClaw articulation with only the tactile pads' friction raised
+(static 2 -> 5, dynamic 1.5 -> 4; README section 5.1, decided 2026-10-26). Everything else comes
+unchanged from the sublayer. scripts/isaac_python.sh points TACUMI_FRANKA_USD_PATH here."""
+    metersPerUnit = 1
+    subLayers = [
+        @../TacHarness/assets/robots/franka_tacumi_dm25pd04.usda@
+    ]
+    upAxis = "Z"
+)
+
+over "panda"
+{
+    over "Gripper"
+    {
+        over "Tacumi"
+        {
+            over "tactile_grip_material"
+            {
+                float physics:dynamicFriction = 4
+                float physics:staticFriction = 5
+            }
+        }
+    }
+}
